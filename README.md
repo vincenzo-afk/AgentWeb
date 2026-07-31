@@ -128,6 +128,8 @@ Instead of writing this:
 await browser.extract(url)
 await search.query(query)
 await crawler.scan(domain)
+``` 
+
 
 ## Architecture Overview
 
