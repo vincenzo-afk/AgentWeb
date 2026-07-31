@@ -132,7 +132,7 @@ await crawler.scan(domain)
 
 
 ## Architecture Overview
-
+```
 A simplified AgentWeb flow:
 
 User / Agent Intent
@@ -153,7 +153,7 @@ Ranking / Trust Layer
         ↓
 Grounded Result + Citations + Trace
 
-
+```
 This architecture is designed to support both one-time research and continuous internet monitoring.
 
 ## Why It Is Different
