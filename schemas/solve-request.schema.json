@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SolveRequest",
+  "type": "object",
+  "required": ["task"],
+  "properties": {
+    "task": { "type": "string", "description": "Natural-language description of intent" },
+    "mode": { "type": "string", "enum": ["flash", "focus", "dive"] },
+    "skill": { "type": "string" },
+    "inputs": { "type": "object" },
+    "webhook_url": { "type": "string", "format": "uri" },
+    "idempotency_key": { "type": "string" }
+  }
+}

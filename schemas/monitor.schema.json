@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Monitor",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "task": { "type": "string" },
+    "status": { "type": "string", "enum": ["active", "paused", "cancelled"] },
+    "frequency": { "type": "string", "enum": ["minutely", "hourly", "daily"] },
+    "webhook_url": { "type": "string", "format": "uri" },
+    "last_checked_at": { "type": "string", "format": "date-time" },
+    "last_change_at": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,245 @@
+openapi: 3.0.3
+info:
+  title: AgentWeb API
+  description: >
+    AgentWeb is an Internet Intelligence Platform. This spec covers the core
+    outcome-first endpoints (/solve, /observe) and low-level primitives
+    (/search, /crawl, /browser, /extract, /memory, /graph). See docs/api for
+    prose documentation.
+  version: "1.0.0"
+servers:
+  - url: https://api.agentweb.dev/v1
+security:
+  - bearerAuth: []
+paths:
+  /solve:
+    post:
+      summary: Run a one-shot grounded research/synthesis task
+      operationId: solve
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SolveRequest'
+      responses:
+        '200':
+          description: Grounded, cited result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SolveResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /observe:
+    post:
+      summary: Create a recurring monitor
+      operationId: observe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObserveRequest'
+      responses:
+        '200':
+          description: Monitor created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Monitor'
+  /observe/{id}:
+    get:
+      summary: Get monitor status/history
+      operationId: getMonitor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Monitor status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Monitor'
+    delete:
+      summary: Cancel a monitor
+      operationId: cancelMonitor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Monitor cancelled
+  /search:
+    post:
+      summary: Low-level search primitive
+      operationId: search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                limit:
+                  type: integer
+                  default: 10
+      responses:
+        '200':
+          description: Search results
+  /extract:
+    post:
+      summary: Structured extraction from a page
+      operationId: extract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                schema:
+                  type: object
+      responses:
+        '200':
+          description: Extracted structured data
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing/invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Mode:
+      type: string
+      enum: [flash, focus, dive, monitor]
+    SolveRequest:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: string
+        mode:
+          $ref: '#/components/schemas/Mode'
+        skill:
+          type: string
+        inputs:
+          type: object
+        webhook_url:
+          type: string
+        idempotency_key:
+          type: string
+    Source:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        trust_score:
+          type: number
+        cited:
+          type: boolean
+    Citation:
+      type: object
+      properties:
+        claim_span:
+          type: array
+          items:
+            type: integer
+        source_ids:
+          type: array
+          items:
+            type: string
+    SolveResponse:
+      type: object
+      properties:
+        execution_id:
+          type: string
+        mode:
+          $ref: '#/components/schemas/Mode'
+        answer:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+        created_at:
+          type: string
+          format: date-time
+    ObserveRequest:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: string
+        webhook_url:
+          type: string
+        frequency:
+          type: string
+          enum: [minutely, hourly, daily]
+    Monitor:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [active, paused, cancelled]
+        last_checked_at:
+          type: string
+          format: date-time
+        last_change_at:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            type:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string

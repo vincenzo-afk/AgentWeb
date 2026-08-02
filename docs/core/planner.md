@@ -1,0 +1,24 @@
+# Planner
+
+The planner is the first stage after intent input: it determines what kind of internet work a task requires — search-only, search plus browsing, multi-source comparison, structured extraction, ongoing monitoring, or some combination.
+
+## Inputs
+
+- The task description (natural language or structured `skill` + `inputs`)
+- Optional `mode` hint (Flash/Focus/Dive/Monitor)
+- Available Internet Skills matching the task pattern (see [concepts/internet-skills.md](../concepts/internet-skills.md))
+
+## Outputs
+
+A **plan**: an ordered (or partially ordered) set of steps to hand to the [Router](router.md), along with an estimated retrieval mode if none was specified.
+
+## Responsibilities
+
+- Classify task intent (lookup, comparison, monitoring, longitudinal tracking, etc.)
+- Decide depth (how many sources, how much browsing vs. static search)
+- Decide whether a matching Internet Skill template applies
+- Produce a plan inspectable via `internet.plan()` (see [api/reference/agents.md](../api/reference/agents.md))
+
+## Learning loop
+
+Over time, plans that produced high-quality, well-cited, low-cost results for a given task class can be stored and reused, improving planner accuracy and reducing cost for recurring task shapes. See [research/economic-model.md](../research/economic-model.md).

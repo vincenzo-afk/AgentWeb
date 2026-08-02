@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SolveResponse",
+  "type": "object",
+  "properties": {
+    "execution_id": { "type": "string" },
+    "mode": { "type": "string", "enum": ["flash", "focus", "dive"] },
+    "answer": { "type": "string" },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "url": { "type": "string", "format": "uri" },
+          "trust_score": { "type": "number", "minimum": 0, "maximum": 1 },
+          "cited": { "type": "boolean" }
+        }
+      }
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim_span": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+          "source_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

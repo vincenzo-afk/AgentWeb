@@ -1,190 +1,76 @@
 # AgentWeb
 
-![Status](https://img.shields.io/badge/status-in%20development-blue)
-![Docs](https://img.shields.io/badge/docs-planned-8A2BE2)
-![API](https://img.shields.io/badge/API-internet%20intelligence-0A7EA4)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Contributions](https://img.shields.io/badge/contributions-welcome-orange)
+**An Internet Intelligence Platform for developers, businesses, researchers, and AI systems.**
 
-> Turn web intent into grounded outcomes.
+AgentWeb gives you a single programmable layer for accessing, understanding, and monitoring the live internet — one API, one orchestration engine, one developer workflow. Instead of stitching together search APIs, crawlers, headless browsers, scrapers, page-change monitors, and citation pipelines yourself, you describe an intent and AgentWeb decides how to search, browse, extract, compare, reuse, monitor, rank, and return grounded results with transparent evidence.
 
-AgentWeb is an Internet Intelligence Platform that gives developers, businesses, researchers, and AI systems a single programmable layer to search, crawl, browse, extract, monitor, and understand the live internet.
+> AgentWeb is an Internet Intelligence Platform that turns web intent into grounded outcomes using search, browser execution, memory, graph reasoning, monitoring, and transparent citations.
 
-Instead of manually stitching together search APIs, crawlers, scrapers, headless browsers, page monitoring systems, ranking logic, and citation pipelines, AgentWeb decides how to retrieve, verify, and return the best result with transparent sources.
+## Why AgentWeb
 
----
+Modern applications that need live internet knowledge usually rely on fragmented tooling: a search API here, a scraper there, a browser automation framework somewhere else, plus hand-rolled ranking and citation logic. That fragmentation raises cost, latency, and maintenance burden, and it forces every team to solve the same orchestration problem independently.
 
-## Why AgentWeb?
+AgentWeb replaces that stack with one outcome-first interface. You express a goal — research a company, compare products, track a competitor, watch for a visa slot — and the platform plans, executes, learns, and adapts automatically.
 
-Modern internet access for software is fragmented.
+## Core capabilities
 
-If you want an AI agent or application to answer a real-world question properly, you often need to combine:
+| Layer | Purpose |
+|---|---|
+| Search | Fast retrieval of links, summaries, and candidate sources |
+| Crawl | Structured traversal across sites and documentation trees |
+| Browser | Rendering, interaction, and extraction on JS-heavy or flow-dependent pages |
+| Extract | Turning raw pages into structured, application-ready data |
+| Monitor | Ongoing observation of pages, entities, and listings with change alerts |
+| Memory | Snapshotting, hashing, and reusing prior page state to avoid redundant fetches |
+| Graph | Linking entities, relationships, and events into queryable knowledge |
+| Synthesis | Producing cited answers, comparisons, reports, and structured outputs |
 
-- Search APIs.
-- Crawlers.
-- Scrapers.
-- Headless browsers.
-- Monitoring tools.
-- Extraction pipelines.
-- Ranking systems.
-- Citation generation.
+## Quickstart
 
-That creates complexity, repeated work, higher costs, brittle workflows, and poor explainability.
+```js
+const result = await internet.solve({
+  task: "Find the cheapest RTX 6090 currently available in India and cite trustworthy sources"
+});
 
-AgentWeb is built to solve that.
-
-Instead of exposing disconnected tools, AgentWeb aims to expose outcomes.
-
-You describe the goal.
-The platform decides the strategy.
-The result comes back grounded, cited, and inspectable.
-
----
-
-## Core Vision
-
-AgentWeb is not just a search API or a scraping API.
-
-It is an Internet Intelligence Platform designed to become a programmable reasoning and execution layer over the live web.
-
-The long-term goal is simple:
-
-- Developers should not think in terms of search vs crawl vs browser vs monitor.
-- Developers should think in terms of intent.
-- AgentWeb should plan, execute, learn, adapt, and explain the best path automatically.
-
----
-
-## What AgentWeb Does
-
-AgentWeb is being designed to support the full lifecycle of internet intelligence:
-
-- Search the web for relevant results.
-- Crawl websites and documentation.
-- Browse dynamic pages with browser automation.
-- Extract structured content from raw pages.
-- Monitor pages, products, policies, releases, and signals over time.
-- Reuse memory from previously seen content.
-- Build graph-aware understanding across entities and relationships.
-- Rank trustworthy sources.
-- Generate grounded answers with citations.
-
----
-
-## Key Product Layers
-
-### 1. Search
-
-Fast retrieval of relevant web results, links, and candidate sources.
-
-### 2. Crawl
-
-Structured traversal of domains, docs, and content trees.
-
-### 3. Browser Intelligence
-
-First-class browser execution for modern JavaScript-heavy and interaction-based websites.
-
-### 4. Extraction
-
-Convert raw web content into structured text, metadata, lists, tables, and entities.
-
-### 5. Monitoring
-
-Watch pages over time for changes, alerts, signals, and diffs.
-
-### 6. Memory
-
-Snapshot, hash, compare, reuse, and refresh only what changed.
-
-### 7. Knowledge Graph
-
-Connect entities, pages, relationships, events, and updates across sources.
-
-### 8. Synthesis
-
-Return grounded answers, reports, comparisons, or structured outputs with citations.
-
----
-
-## Retrieval Modes
-
-AgentWeb can expose different retrieval modes depending on depth, speed, and workload.
-
-| Mode | Purpose | Description |
-|------|---------|-------------|
-| Flash | Instant retrieval | Fast text-and-link search with lightweight grounding. |
-| Focus | Balanced research | Search plus selective browsing and extraction. |
-| Dive | Deep research | Multi-step browsing, extraction, comparison, and synthesis. |
-| Monitor | Continuous intelligence | Scheduled watching, diffing, and alert delivery. |
-
----
-
-## Example Experience
-
-Instead of writing this:
-
-```ts
-await browser.extract(url)
-await search.query(query)
-await crawler.scan(domain)
-``` 
-
-
-## Architecture Overview
+const monitor = await internet.observe({
+  task: "Track visa slot availability and alert when a new slot appears"
+});
 ```
-A simplified AgentWeb flow:
 
-User / Agent Intent
-        ↓
-      Planner
-        ↓
-      Router
-        ↓
-Search / Browser / Crawl / Extract
-        ↓
-      Memory
-        ↓
-  Knowledge Graph
-        ↓
-Ranking / Trust Layer
-        ↓
-    Synthesis Layer
-        ↓
-Grounded Result + Citations + Trace
+See [docs/getting-started](docs/getting-started/index.md) for a full walkthrough.
 
-```
-This architecture is designed to support both one-time research and continuous internet monitoring.
+## Documentation map
 
-## Why It Is Different
+- [Vision](docs/vision.md) — what AgentWeb is trying to become
+- [Architecture](docs/architecture.md) — planner, router, execution, memory, graph, synthesis
+- [Concepts](docs/concepts/index.md) — the ideas behind outcome-first internet access
+- [API Reference](docs/api/index.md) — endpoints, requests, responses, errors
+- [Core Systems](docs/core/index.md) — internals of each platform layer
+- [Guides](docs/guides/index.md) — task-oriented how-tos
+- [Research](docs/research/index.md) — whitepaper, landscape, economics
+- [Operations](docs/operations/index.md) — running AgentWeb at scale
+- [Security](docs/security/index.md) — threat model and compliance
+- [SDKs](docs/sdk/index.md) — JavaScript, Python, REST
 
-AgentWeb is not trying to be only one of these:
-A search API.
-A crawler.
-A scraper.
-A browser automation tool.
-A monitoring platform.
-A citation engine.
-It aims to unify all of them into one intelligent orchestration layer.
-The real differentiation comes from:
-Outcomes over tools.
-Browser intelligence as a first-class layer.
-Memory reuse instead of repeated fetching.
-Knowledge graph reasoning over plain retrieval.
-Transparent citations and execution traces.
-Agent-native planning and execution patterns.
+## Retrieval modes
 
+AgentWeb exposes different depths of retrieval so you can trade off speed, cost, and comprehensiveness:
 
-## Example Use Cases
+- **Flash** — instant search and lightweight grounding
+- **Focus** — search plus selective browsing and extraction
+- **Dive** — deep multi-source research with comparison and ranking
+- **Monitor** — continuous observation, diffing, and alerting
 
-AgentWeb can be useful for:
-AI assistants that need grounded live web answers.
-Research agents that produce cited reports.
-Product comparison engines.
-Ecommerce price tracking.
-Competitor monitoring.
-Documentation change detection.
-Visa slot tracking.
-Company intelligence workflows.
-Market research systems.
-Enterprise knowledge monitoring.
+See [retrieval-modes.md](docs/concepts/retrieval-modes.md) for details.
+
+## Status
+
+AgentWeb is under active design and development. The current MVP focuses on a single grounded-research endpoint with basic trust scoring, citations, and page-change monitoring. See the [roadmap](docs/roadmap.md) for what's next.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please also read our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+Licensed under the [MIT License](LICENSE).
