@@ -24,6 +24,9 @@ dist/
 
 # Environment and secrets
 .env
+migration-export/
+*.migration.jsonl
+*.migration-manifest.json
 .env.*
 !.env.example
 

@@ -19,7 +19,18 @@ def main() -> None:
         raise SystemExit(f"OpenAPI paths missing: {', '.join(missing_paths)}")
     if 'name = "agentweb"' not in pyproject or 'requires-python = ">=3.11"' not in pyproject:
         raise SystemExit("pyproject metadata is incomplete")
-    for path in ["README.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md", ".github/workflows/ci.yml"]:
+    for path in [
+        "README.md",
+        "LICENSE",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        ".github/workflows/ci.yml",
+        "src/agentweb/secrets.py",
+        "src/agentweb/rdbms.py",
+        "src/agentweb/migrations.py",
+        "spec/build-plan/SECRETS_RDBMS_DESIGN.md",
+        "docs/operations/rdbms-migration.md",
+    ]:
         if not (ROOT / path).exists():
             raise SystemExit(f"required repository file missing: {path}")
     for schema_path in (ROOT / "schemas").glob("*.json"):
@@ -30,6 +41,8 @@ def main() -> None:
     response_schema = json.loads((ROOT / "schemas" / "solve-response.schema.json").read_text(encoding="utf-8"))
     if "insufficient_evidence" not in response_schema.get("properties", {}):
         raise SystemExit("solve response schema is missing insufficient_evidence")
+    if 'postgres = ["psycopg[binary]>=3.1"]' not in pyproject:
+        raise SystemExit("PostgreSQL optional dependency is missing")
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     if not re.search(r"python-version:\s*[\"']?3\.11", workflow):
         raise SystemExit("CI must verify Python 3.11")

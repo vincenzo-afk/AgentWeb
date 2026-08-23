@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import AuthenticationError, InvalidRequestError, PermissionError, RateLimitError
+from .secrets import SecretProvider, build_provider
 
 
 ALL_SCOPES = {
@@ -224,20 +225,21 @@ class KeyStore:
 class Authenticator:
     """Authenticate environment or durable keys and return a tenant-scoped principal."""
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(self, path: str | Path | None = None, provider: SecretProvider | None = None) -> None:
         self.key_store = KeyStore(path or os.getenv("AGENTWEB_DATA_PATH", "agentweb.sqlite3"))
-        self._keys = self._load_keys()
+        self.secret_provider = provider or build_provider()
+        self._keys = self._load_keys(self.secret_provider)
         self._cache: dict[str, tuple[float, Principal]] = {}
         self._cache_ttl = 5.0
 
     @staticmethod
-    def _load_keys() -> dict[str, tuple[str, frozenset[str]]]:
+    def _load_keys(provider: SecretProvider) -> dict[str, tuple[str, frozenset[str]]]:
         configured: dict[str, tuple[str, frozenset[str]]] = {}
-        single = os.getenv("AGENTWEB_API_KEY")
         default_org = os.getenv("AGENTWEB_API_KEY_ORG", "env")
+        single = provider.get("AGENTWEB_API_KEY", required=False)
         if single:
             configured[single] = (default_org, frozenset(ALL_SCOPES))
-        raw = os.getenv("AGENTWEB_API_KEYS")
+        raw = provider.get("AGENTWEB_API_KEYS", required=False)
         if raw:
             try:
                 decoded = json.loads(raw)

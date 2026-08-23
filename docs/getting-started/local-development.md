@@ -10,6 +10,8 @@ source .venv/bin/activate
 python -m pip install --editable .
 # Optional rendered-browser support:
 python -m pip install --editable '.[browser]'
+# Optional production PostgreSQL adapter and migration tooling:
+python -m pip install --editable '.[production]'
 ```
 
 ## Run the server
@@ -18,7 +20,7 @@ python -m pip install --editable '.[browser]'
 agentweb --host 127.0.0.1 --port 8000 --data agentweb.sqlite3
 ```
 
-The liveness endpoint is available at `http://127.0.0.1:8000/health`. The API accepts bearer authentication when `AGENTWEB_API_KEY` or `AGENTWEB_API_KEYS` is configured; otherwise it runs in local development mode.
+The liveness endpoint is available at `http://127.0.0.1:8000/health`. The API accepts bearer authentication when `AGENTWEB_API_KEY` or `AGENTWEB_API_KEYS` is configured; otherwise it runs in local development mode. In staging and production, set `AGENTWEB_ENV` and use an external secret provider; the application rejects the environment provider outside development.
 
 For rendered sessions, set `AGENTWEB_CHROMIUM_PATH` to an installed Chromium-compatible binary. The browser adapter creates a new context per request and supports `click`, `type`, `wait_for`, `scroll`, and `extract` actions.
 
@@ -33,6 +35,26 @@ Use `agentweb --worker --once --data agentweb.sqlite3` for a single due-job exec
 
 For a Linux deployment, [`deploy/agentweb-scheduler.service`](../../deploy/agentweb-scheduler.service) provides a restart-on-failure systemd template. It runs the worker as a dedicated user, keeps the data directory writable only where needed, and enables `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem`, and `ProtectHome`.
 
+## External secrets and PostgreSQL migration
+
+The free local provider reads environment values only in development. For a production-shaped test, use an executable that accepts a validated secret name and prints only that secret value, then configure `AGENTWEB_SECRET_PROVIDER=command` and `AGENTWEB_SECRET_COMMAND=/path/to/provider`. The command provider applies a five-second timeout, never logs stdout, and caches values only in memory for a bounded TTL.
+
+Export the relational portion of a local SQLite database without mutating the source:
+
+```bash
+agentweb migrate-export --source agentweb.sqlite3 --output ./migration-export
+agentweb migrate-export --source agentweb.sqlite3 --output ./migration-export --dry-run
+```
+
+With `AGENTWEB_ENV=production`, a PostgreSQL `DATABASE_URL` resolved through the configured secret provider, and `.[production]` installed, validate or apply the manifest transactionally:
+
+```bash
+agentweb migrate-import --input ./migration-export --dry-run
+agentweb migrate-import --input ./migration-export
+```
+
+The import is additive and idempotent. It verifies table checksums, bootstraps the required indexes, records `relational-v1`, and provides no destructive down-migration. If deployment smoke tests fail, stop the new API tier and continue on the prior SQLite-compatible release while correcting the migration.
+
 ## Verify changes
 
 ```bash
@@ -45,4 +67,4 @@ Tests use local HTTP fixtures and do not require a live search provider. The `AG
 
 ## Current implementation boundary
 
-Implemented modules include the HTTP API, search adapter, bounded same-origin crawler, parser, normalizer, extractor, basic ranking, trust and safety gate, isolated rendered browser sessions, SQLite memory, durable monitor jobs, request-driven and scheduled checks, signed webhook delivery, bearer scope checks, rate limiting, and SQLite execution traces. The knowledge graph, agent-native plan/execute APIs, and event-driven workflows remain roadmap work.
+Implemented modules include the HTTP API, search adapter, bounded same-origin crawler, parser, normalizer, extractor, basic ranking, trust and safety gate, isolated rendered browser sessions, SQLite memory, durable monitor jobs, request-driven and scheduled checks, signed webhook delivery, bearer scope checks, rate limiting, organization-scoped SQLite execution traces, fail-closed secret-provider modes, a bounded PostgreSQL relational adapter, and additive migration tooling. The knowledge graph, agent-native plan/execute APIs, distributed dual-write cutover, and event-driven workflows remain roadmap work.

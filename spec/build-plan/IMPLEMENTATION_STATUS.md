@@ -6,13 +6,13 @@ This document maps the runnable repository to the implementation-facing specific
 
 | Module | Status | Evidence | Next completion work |
 |---|---|---|---|
-| API tier | Partial | `src/agentweb/api.py` exposes health, solve, observe, search, crawl, extract, memory, report, and authenticated admin key/audit routes with organization-scoped ownership checks, request IDs, scope auth, restricted CORS, and per-identity rate limiting. | Add idempotency records, usage accounting, and complete endpoint parity. |
+| API tier | Partial | `src/agentweb/api.py` exposes health, solve, observe, search, crawl, extract, memory, report, and authenticated admin key/audit routes with organization-scoped ownership checks, request IDs, scope auth, restricted CORS, and per-identity rate limiting. Startup now resolves platform secrets through the provider boundary. | Add idempotency records, usage accounting, and complete endpoint parity. |
 | Search | Partial | `src/agentweb/search.py` provides a public HTML adapter with normalized URL/title/snippet output. | Add provider interface, freshness handling, retry policy, and typed failures. |
 | Parser | Implemented | `src/agentweb/parser.py` parses HTML, JSON, text, and PDF fallbacks with warnings. | Add richer table and layout parsing when a dependency policy permits it. |
 | Normalizer | Implemented | `src/agentweb/normalizer.py` canonicalizes prices, dates, entities, and preserves raw values on failure. | Expand locale-specific date and currency coverage. |
 | Crawler | Partial | `src/agentweb/crawler.py` performs bounded same-origin breadth-first traversal with URL deduplication, depth/page limits, robots handling, and truncation reporting. | Add scheduler-aware rate limiting and richer crawl persistence. |
 | Extractor | Partial | `AgentWebEngine.extract` returns parsed metadata, links, warnings, trust score, and schema-guided normalized fields. | Add per-field confidence and richer tables/entities. |
-| Memory | Implemented | `src/agentweb/memory.py` stores immutable organization-scoped content versions with latest lookup, hash diff, monitor state, tenant-owned scheduler jobs, leases, retries, and dead-letter state. | Add retention and task-aware reuse windows. |
+| Memory | Implemented | `src/agentweb/memory.py` stores immutable organization-scoped content versions with latest lookup, hash diff, monitor state, tenant-owned scheduler jobs, leases, retries, and dead-letter state. Production relational ownership is exposed separately through `rdbms.py`; runtime cutover remains explicit. | Add retention and task-aware reuse windows. |
 | Trust Engine | Implemented | `src/agentweb/trust_engine.py` blocks unsafe target classes by default and supports explicit blocked domains. | Add robots.txt and policy-aware decisions at the crawler boundary. |
 | Ranking | Implemented | `src/agentweb/ranking.py` combines trust, task relevance, and corroboration into deterministic ordering. | Add recency and extraction-confidence signals when source metadata is available. |
 | Synthesis | Partial | `solve` returns source-backed text, citation spans, and explicit `insufficient_evidence`. | Add conflict-aware output metadata and richer structured formats. |
@@ -26,7 +26,7 @@ This document maps the runnable repository to the implementation-facing specific
 
 ## Build order for this iteration
 
-This slice follows the dependency graph through the Phase 1 tenant and security foundations: **organization identity → hashed API keys → scoped storage → tenant-filtered traces/jobs → admin audit**. Graph, agent-native APIs, and event-driven workflow automation remain out of scope because the project scope explicitly defers them.
+This slice follows the dependency graph through the production data boundary: **external secret provider → fail-closed environment policy → PostgreSQL schema/pool → additive migration manifest → transactional import/rollback**. Graph, agent-native APIs, and event-driven workflow automation remain out of scope because the project scope explicitly defers them.
 
 ## Done criteria for this slice
 
@@ -34,4 +34,4 @@ A module is considered complete only when its documented interface is implemente
 
 ## Deliberate local-MVP constraints
 
-The default implementation remains standard-library only. Rendered browser support is an optional free Playwright extra using an environment-provided Chromium binary. Persistent API keys are stored as PBKDF2-derived hashes, never plaintext; environment keys remain a local compatibility path. Snapshots, monitors, jobs, traces, keys, and audit events are organization-scoped. Scheduler execution is a separately supervised foreground worker backed by tenant-owned SQLite leases, retries, and dead-letter state. Webhooks are opt-in and are not sent unless a monitor explicitly supplies a URL and a signing secret is configured.
+The default implementation remains standard-library only. Rendered browser support is an optional free Playwright extra using an environment-provided Chromium binary. Platform secrets use a fail-closed provider boundary in staging/production; customer API keys remain PBKDF2-derived hashes, never plaintext. The optional PostgreSQL adapter provides the relational schema, required tenant indexes, bounded pooling, and additive migration import/export; the local runtime keeps SQLite snapshots/monitor state until an explicit production cutover. Snapshots, monitors, jobs, traces, keys, and audit events are organization-scoped. Scheduler execution is a separately supervised foreground worker backed by tenant-owned SQLite leases, retries, and dead-letter state. Webhooks are opt-in and are not sent unless a monitor explicitly supplies a URL and a signing secret is configured.

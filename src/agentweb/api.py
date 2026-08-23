@@ -13,6 +13,7 @@ from .auth import Authenticator, RateLimiter
 from .engine import AgentWebEngine
 from .errors import AgentWebError, InvalidRequestError, NotFoundError, PermissionError
 from .search import search
+from .secrets import build_provider
 
 
 class AgentWebHandler(BaseHTTPRequestHandler):
@@ -244,7 +245,8 @@ def create_server(host: str = "127.0.0.1", port: int = 8000, data_path: str = "a
 
     server = ThreadingHTTPServer((host, port), AgentWebHandler)
     store = MemoryStore(data_path)
-    server.engine = AgentWebEngine(store)  # type: ignore[attr-defined]
-    server.authenticator = Authenticator(data_path)  # type: ignore[attr-defined]
+    provider = build_provider()
+    server.engine = AgentWebEngine(store, secret_provider=provider)  # type: ignore[attr-defined]
+    server.authenticator = Authenticator(data_path, provider=provider)  # type: ignore[attr-defined]
     server.rate_limiter = RateLimiter()  # type: ignore[attr-defined]
     return server

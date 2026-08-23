@@ -19,6 +19,9 @@ from agentweb.engine import AgentWebEngine
 from agentweb.errors import AuthenticationError, PermissionError
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
+from agentweb.migrations import _prepare_row, export_sqlite_relational
+from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError
+from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
 from agentweb.normalizer import normalize
 from agentweb.parser import parse
 from agentweb.ranking import rank
@@ -54,6 +57,9 @@ class AgentWebTests(unittest.TestCase):
         os.environ.pop("AGENTWEB_API_KEY", None)
         os.environ.pop("AGENTWEB_API_KEYS", None)
         os.environ.pop("AGENTWEB_CHROMIUM_PATH", None)
+        os.environ.pop("AGENTWEB_ENV", None)
+        os.environ.pop("AGENTWEB_SECRET_PROVIDER", None)
+        os.environ.pop("AGENTWEB_DB_POOL_SIZE", None)
         self.fixture.shutdown()
         self.fixture.server_close()
         self.temp_dir.cleanup()
@@ -190,6 +196,49 @@ class AgentWebTests(unittest.TestCase):
         body = b'{"ok":true}'
         expected_digest = hmac.new(b"secret", b"1700000000." + body, hashlib.sha256).hexdigest()
         self.assertEqual(signature(body, "1700000000", "secret"), f"t=1700000000,v1={expected_digest}")
+
+    def test_external_secret_mapping_and_production_fail_closed_policy(self):
+        provider = MappingSecretProvider({"DATABASE_URL": "postgresql://db.example/agentweb"}, ttl_seconds=0)
+        self.assertEqual(provider.get("DATABASE_URL"), "postgresql://db.example/agentweb")
+        os.environ["AGENTWEB_ENV"] = "production"
+        os.environ["AGENTWEB_SECRET_PROVIDER"] = "env"
+        with self.assertRaises(SecretProviderError):
+            SecretProviderConfig.from_environment()
+        os.environ["AGENTWEB_SECRET_PROVIDER"] = "mapping"
+        config = DatabaseConfig.from_environment(provider)
+        self.assertEqual(config.driver, "postgres")
+        self.assertEqual(config.pool_size, 4)
+
+    def test_production_database_requires_postgresql_url(self):
+        os.environ["AGENTWEB_ENV"] = "production"
+        os.environ["AGENTWEB_SECRET_PROVIDER"] = "mapping"
+        with self.assertRaises(DatabaseConfigurationError):
+            DatabaseConfig.from_environment(MappingSecretProvider({"DATABASE_URL": "sqlite:///unsafe.db"}))
+
+    def test_relational_export_is_dry_run_and_checksumed(self):
+        self.engine.create_monitor(f"Watch {self.url}", "daily", org_id="org-a")
+        output = Path(self.temp_dir.name) / "migration"
+        manifest = export_sqlite_relational(self.store.path, output, dry_run=True)
+        self.assertEqual(manifest["format"], "agentweb-relational-export-v1")
+        self.assertFalse(output.exists())
+        self.assertTrue(any(item["table"] == "api_keys" for item in manifest["tables"]))
+        self.assertTrue(any(item["table"] == "audit_events" for item in manifest["tables"]))
+        self.assertTrue(any(item["table"] == "scheduler_jobs" for item in manifest["tables"]))
+        self.assertFalse(manifest["destructive"])
+
+    def test_relational_import_prepares_legacy_defaults_and_rejects_missing_identity(self):
+        row = {
+            "id": "mon-1",
+            "org_id": "org-a",
+            "task": "watch",
+            "status": "active",
+            "frequency": "daily",
+        }
+        prepared = _prepare_row("monitors", row)
+        self.assertIsNotNone(prepared[7])
+        self.assertIsNotNone(getattr(prepared[7], "tzinfo", None))
+        with self.assertRaisesRegex(ValueError, "organizations"):
+            _prepare_row("organizations", {"id": "org-a", "name": None})
 
     def test_authenticator_enforces_scopes(self):
         os.environ["AGENTWEB_API_KEYS"] = json.dumps({"test-key": ["search:read"]})

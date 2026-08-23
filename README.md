@@ -117,11 +117,33 @@ Configuration is provided through environment variables and CLI flags. No secret
 | `AGENTWEB_ALLOW_PRIVATE_TARGETS` | unset | Test-only override for local fixture servers; do not enable in a network-facing deployment. |
 | `AGENTWEB_QUIET` | unset | Set to `1` to suppress request logs. |
 | `AGENTWEB_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed for CORS; wildcard CORS is retained only for unauthenticated local development. |
+| `AGENTWEB_ENV` | `development` | Runtime environment: `development`, `staging`, or `production`; non-development environments fail closed on local-only secrets. |
+| `AGENTWEB_SECRET_PROVIDER` | `env` in development | Secret source: `env`, injected `mapping` for tests, or a command-backed provider. Staging/production must not use `env`. |
+| `AGENTWEB_SECRET_COMMAND` | unset | Executable used by the command provider; it receives only the secret name and returns the value on stdout. |
+| `AGENTWEB_SECRET_TTL_SECONDS` | `30` | Maximum in-process secret cache lifetime, bounded to 300 seconds. |
+| `AGENTWEB_DB_POOL_SIZE` | `4` | Bounded PostgreSQL connection pool size, capped at 32. |
+| `DATABASE_URL` | SQLite in development | `sqlite:///...` for local use; staging/production require `postgresql://...` and the `postgres` extra. |
 | `--host` | `127.0.0.1` | Server bind address. |
 | `--port` | `8000` | Server port. |
 | `--data` | `agentweb.sqlite3` | SQLite database path for monitor and snapshot state. |
 
-For a network-facing deployment, bind the server behind a reverse proxy, use HTTPS, set an API key, and apply the operational controls appropriate to the environment. The included server is a compact local MVP rather than a complete production edge proxy.
+For a network-facing deployment, set `AGENTWEB_ENV=staging` or `production`, source platform secrets through `AGENTWEB_SECRET_PROVIDER=command` or an injected deployment provider, set a PostgreSQL `DATABASE_URL`, install `agentweb[production]`, and put the API behind a TLS-terminating reverse proxy. The included server remains a compact application boundary rather than a complete production edge proxy.
+
+The production relational migration is additive and non-destructive. Export a local database without modifying it:
+
+```bash
+agentweb migrate-export --source agentweb.sqlite3 --output ./migration-export
+agentweb migrate-export --source agentweb.sqlite3 --output ./migration-export --dry-run
+```
+
+For an authenticated production deployment, validate or apply the export using a PostgreSQL `DATABASE_URL` resolved by the configured secret provider:
+
+```bash
+agentweb migrate-import --input ./migration-export --dry-run
+agentweb migrate-import --input ./migration-export
+```
+
+The importer bootstraps the relational schema, validates the manifest checksums, applies rows in one transaction, and records `relational-v1` so retries are idempotent. There is intentionally no destructive down-migration; rollback is performed by stopping the new API tier and returning to the prior SQLite-compatible deployment until the import is corrected.
 
 ## HTTP API
 
@@ -171,16 +193,20 @@ The implemented path is intentionally direct while preserving the interfaces des
 flowchart LR
     Client[Client] --> API[HTTP API]
     API --> Engine[AgentWebEngine]
+    API --> Secrets[Secret provider]
     Engine --> Search[Search adapter]
     Engine --> Fetch[HTTP fetch and extraction]
     Engine --> Trust[Trust scoring]
-    Engine --> Memory[SQLite memory]
+    Engine --> Relational[PostgreSQL relational store]
+    Engine --> Memory[SQLite local memory]
     Engine --> Browser[Isolated browser]
     Memory --> Scheduler[Durable scheduler]
     Search --> Sources[Sources and citations]
     Fetch --> Sources
     Trust --> Sources
-    Memory --> Monitor[Monitor state and change detection]
+    Relational --> Tenant[Organizations, keys, monitors, runs, usage]
+    Relational --> Audit[Audit events]
+    Memory --> Monitor[Snapshot and monitor execution state]
     Scheduler --> Monitor
 ```
 
@@ -217,7 +243,7 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 ## Current limitations
 
-This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, a hosted search-provider integration, LLM-based synthesis, graph storage, idempotency records, a shared distributed rate limiter, or a distributed scheduler. Organization-scoped persistent API keys, audit events, hashed secret storage, and application-level tenant isolation are implemented in the local SQLite deployment; an external secrets manager and production RDBMS remain deployment work. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
+This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, a hosted search-provider integration, LLM-based synthesis, graph storage, idempotency records, a shared distributed rate limiter, or a distributed scheduler. External secret resolution, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, and transaction-scoped import are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
 These limitations are explicit so the repository's runnable behavior remains distinct from the broader product vision and roadmap.
 

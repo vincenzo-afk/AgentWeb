@@ -19,6 +19,7 @@ from .parser import parse
 from .ranking import rank
 from .scheduler import Scheduler
 from .search import search
+from .secrets import SecretProvider, build_provider
 from .trace import Span, TraceStore
 from .trust_engine import TrustEngine
 
@@ -26,8 +27,9 @@ URL_RE = re.compile(r"https?://[^\s)\]>]+")
 
 
 class AgentWebEngine:
-    def __init__(self, memory: MemoryStore | None = None) -> None:
+    def __init__(self, memory: MemoryStore | None = None, secret_provider: SecretProvider | None = None) -> None:
         self.memory = memory or MemoryStore()
+        self.secret_provider = secret_provider or build_provider()
         self.traces = TraceStore(self.memory.path)
         self.trust_engine = TrustEngine(
             blocked_domains={domain for domain in os.getenv("AGENTWEB_BLOCKED_DOMAINS", "").split(",") if domain}
@@ -279,7 +281,7 @@ class AgentWebEngine:
         if changed:
             monitor.last_change_at = now
             if monitor.webhook_url:
-                secret = os.getenv("AGENTWEB_WEBHOOK_SIGNING_KEY", "")
+                secret = self.secret_provider.get("WEBHOOK_SIGNING_KEY", required=False) or self.secret_provider.get("AGENTWEB_WEBHOOK_SIGNING_KEY", required=False) or ""
                 if not secret:
                     monitor.last_error = "webhook signing secret is not configured"
                 else:
