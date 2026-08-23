@@ -39,6 +39,8 @@ paths:
       summary: List immutable snapshots for a target
       operationId: getMemory
       parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
         - name: target
           in: path
           required: true
@@ -76,6 +78,8 @@ paths:
     post:
       summary: Run a one-shot grounded research/synthesis task
       operationId: solve
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -96,9 +100,20 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
   /observe:
+    get:
+      summary: List monitors for the authenticated organization
+      operationId: listMonitors
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Cursor-paginated organization monitors
     post:
       summary: Create a recurring monitor
       operationId: observe
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -218,6 +233,9 @@ paths:
     get:
       summary: List redacted API keys for the authenticated organization
       operationId: listApiKeys
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
         '200':
           description: Redacted organization API keys
@@ -234,6 +252,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
     post:
       summary: Create a scoped API key for the authenticated organization
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       operationId: createApiKey
       requestBody:
         required: true
@@ -261,6 +281,7 @@ paths:
       summary: Revoke an API key owned by the authenticated organization
       operationId: revokeApiKey
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - name: id
           in: path
           required: true
@@ -275,9 +296,30 @@ paths:
     get:
       summary: Read immutable security audit events for the organization
       operationId: listAuditEvents
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
         '200':
           description: Organization audit events
+  /admin/usage:
+    get:
+      summary: Read current-period usage and estimated cost for the organization
+      operationId: getUsage
+      parameters:
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^\\d{4}-\\d{2}$'
+      responses:
+        '200':
+          description: Usage summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSummary'
   /extract:
     post:
       summary: Structured extraction from a page
@@ -298,6 +340,31 @@ paths:
         '200':
           description: Extracted structured data
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+
   securitySchemes:
     bearerAuth:
       type: http
@@ -331,6 +398,18 @@ components:
     Mode:
       type: string
       enum: [flash, focus, dive, monitor]
+    UsageSummary:
+      type: object
+      required: [period, requests_by_mode, estimated_cost]
+      properties:
+        period:
+          type: string
+        requests_by_mode:
+          type: object
+          additionalProperties:
+            type: integer
+        estimated_cost:
+          type: number
     ApiKey:
       type: object
       properties:
@@ -491,6 +570,10 @@ components:
         frequency:
           type: string
           enum: [minutely, hourly, daily]
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 128
     Monitor:
       type: object
       properties:

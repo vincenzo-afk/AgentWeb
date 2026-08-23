@@ -13,10 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     openapi = (ROOT / "openapi" / "openapi.yaml").read_text(encoding="utf-8")
-    required_paths = ["/health", "/solve", "/observe", "/observe/{id}", "/search", "/crawl", "/browser/sessions", "/extract", "/memory/{target}", "/report/{execution_id}", "/admin/keys", "/admin/keys/{id}", "/admin/audit"]
+    required_paths = ["/health", "/solve", "/observe", "/observe/{id}", "/search", "/crawl", "/browser/sessions", "/extract", "/memory/{target}", "/report/{execution_id}", "/admin/keys", "/admin/keys/{id}", "/admin/audit", "/admin/usage"]
     missing_paths = [path for path in required_paths if path not in openapi]
     if missing_paths:
         raise SystemExit(f"OpenAPI paths missing: {', '.join(missing_paths)}")
+    for contract_marker in ["operationId: listMonitors", "operationId: getUsage", "IdempotencyKey", "Cursor", "UsageSummary"]:
+        if contract_marker not in openapi:
+            raise SystemExit(f"OpenAPI contract marker missing: {contract_marker}")
     if 'name = "agentweb"' not in pyproject or 'requires-python = ">=3.11"' not in pyproject:
         raise SystemExit("pyproject metadata is incomplete")
     for path in [

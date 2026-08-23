@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
+import re
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,13 +15,48 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .auth import Authenticator, RateLimiter
 from .engine import AgentWebEngine
-from .errors import AgentWebError, InvalidRequestError, NotFoundError, PermissionError
+from .errors import AgentWebError, ConflictError, InvalidRequestError, NotFoundError, PermissionError
 from .search import search
 from .secrets import build_provider
 
 
+def _request_hash(payload: dict) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _decode_cursor(value: str) -> int:
+    if not value:
+        return 0
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(value.encode("ascii") + b"===").decode("utf-8"))
+        offset = int(decoded["offset"])
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error):
+        raise InvalidRequestError("cursor is invalid")
+    if offset < 0:
+        raise InvalidRequestError("cursor is invalid")
+    return offset
+
+
+def _encode_cursor(offset: int) -> str:
+    raw = json.dumps({"offset": offset}, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, bool]:
+    try:
+        limit = int(query.get("limit", ["50"])[0])
+    except (ValueError, TypeError):
+        raise InvalidRequestError("limit must be an integer")
+    if limit < 1 or limit > 100:
+        raise InvalidRequestError("limit must be between 1 and 100")
+    offset = _decode_cursor(query.get("cursor", [""])[0])
+    page = items[offset : offset + limit]
+    has_more = offset + limit < len(items)
+    return page, _encode_cursor(offset + limit) if has_more else None, has_more
+
+
 class AgentWebHandler(BaseHTTPRequestHandler):
-    server_version = "AgentWeb/0.3"
+    server_version = "AgentWeb/0.4"
 
     @property
     def engine(self) -> AgentWebEngine:
@@ -94,12 +133,48 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             raise InvalidRequestError("request body must be a JSON object")
         return payload
 
+    def _idempotency_key(self, payload: dict | None = None) -> str | None:
+        payload = payload or {}
+        value = payload.get("idempotency_key") or self.headers.get("Idempotency-Key")
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip() or len(value) > 128:
+            raise InvalidRequestError("idempotency_key must be a non-empty string up to 128 characters")
+        return value.strip()
+
+    def _begin_idempotency(self, principal, key: str | None, payload: dict) -> tuple[str | None, str | None]:
+        if key is None:
+            return None, None
+        semantic_payload = {name: value for name, value in payload.items() if name != "idempotency_key"}
+        request_hash = _request_hash(semantic_payload)
+        existing = self.engine.memory.claim_idempotency(principal.org_id, key, request_hash)
+        if existing:
+            if existing["request_hash"] != request_hash:
+                raise ConflictError("idempotency key was already used with a different request")
+            if existing["status"] == "completed":
+                body = json.loads(existing.get("response_body") or "null")
+                self._send_json(int(existing["response_status"]), body, "req_replay_" + uuid.uuid4().hex[:12])
+                return key, None
+            raise ConflictError("idempotency key is already being processed")
+        return key, request_hash
+
+    def _complete_idempotency(self, principal, key: str | None, request_hash: str | None, status: int, payload: dict | list | None) -> None:
+        if key and request_hash:
+            body = "" if payload is None else json.dumps(payload, ensure_ascii=False)
+            self.engine.memory.complete_idempotency(principal.org_id, key, request_hash, status, body)
+
+    def _release_idempotency(self, principal, key: str | None, request_hash: str | None) -> None:
+        if key and request_hash:
+            self.engine.memory.release_idempotency(principal.org_id, key, request_hash)
+
     def do_OPTIONS(self) -> None:  # noqa: N802
         self._send_json(HTTPStatus.NO_CONTENT)
 
     def do_GET(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+        query = parse_qs(parsed_url.query)
         if path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok", "service": "agentweb"}, request_id)
             return
@@ -113,6 +188,10 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         if principal is None:
             return
         try:
+            if path == "/observe":
+                monitors, next_cursor, has_more = _page(self.engine.memory.list_monitors(principal.org_id), query)
+                self._send_json(HTTPStatus.OK, {"data": monitors, "monitors": monitors, "next_cursor": next_cursor, "has_more": has_more}, request_id)
+                return
             if path.startswith("/observe/"):
                 monitor_id = path.rsplit("/", 1)[-1]
                 monitor = self.engine.memory.get_monitor(monitor_id, principal.org_id)
@@ -131,7 +210,6 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 target_part = path[len("/memory/") :]
                 if target_part.endswith("/diff"):
                     target = unquote(target_part[: -len("/diff")].rstrip("/"))
-                    query = parse_qs(urlparse(self.path).query)
                     from_hash = query.get("from", [""])[0]
                     to_hash = query.get("to", [""])[0]
                     if not from_hash or not to_hash:
@@ -143,14 +221,26 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.OK, payload, request_id)
                     return
                 target = unquote(target_part)
-                snapshots = self.engine.memory.list_snapshots(target, principal.org_id)
-                self._send_json(HTTPStatus.OK, {"org_id": principal.org_id, "target": target, "snapshots": snapshots}, request_id)
+                snapshots, next_cursor, has_more = _page(self.engine.memory.list_snapshots(target, principal.org_id), query)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"org_id": principal.org_id, "target": target, "snapshots": snapshots, "data": snapshots, "next_cursor": next_cursor, "has_more": has_more},
+                    request_id,
+                )
                 return
             if path == "/admin/keys":
-                self._send_json(HTTPStatus.OK, {"keys": self.authenticator.key_store.list_keys(principal.org_id)}, request_id)
+                keys, next_cursor, has_more = _page(self.authenticator.key_store.list_keys(principal.org_id), query)
+                self._send_json(HTTPStatus.OK, {"keys": keys, "data": keys, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
             if path == "/admin/audit":
-                self._send_json(HTTPStatus.OK, {"events": self.authenticator.key_store.list_audit(principal.org_id)}, request_id)
+                events, next_cursor, has_more = _page(self.authenticator.key_store.list_audit(principal.org_id), query)
+                self._send_json(HTTPStatus.OK, {"events": events, "data": events, "next_cursor": next_cursor, "has_more": has_more}, request_id)
+                return
+            if path == "/admin/usage":
+                period = query.get("period", [None])[0]
+                if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
+                    raise InvalidRequestError("period must use YYYY-MM format")
+                self._send_json(HTTPStatus.OK, self.engine.memory.usage_summary(principal.org_id, period), request_id)
                 return
             raise NotFoundError("route not found")
         except AgentWebError as error:
@@ -163,21 +253,30 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         principal = self._authenticate(scope, request_id)
         if principal is None:
             return
+        idempotency_key = None
+        request_hash = None
         try:
+            if path.startswith(("/admin/keys/", "/observe/")):
+                idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(), {})
+                if idempotency_key and request_hash is None:
+                    return
             if path.startswith("/admin/keys/"):
                 key_id = path.rsplit("/", 1)[-1]
                 if not self.authenticator.revoke_key(principal.org_id, key_id, principal.key_id):
                     raise NotFoundError("API key not found")
+                self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.NO_CONTENT), None)
                 self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
                 return
             if path.startswith("/observe/"):
                 monitor_id = path.rsplit("/", 1)[-1]
                 if not self.engine.memory.delete_monitor(monitor_id, principal.org_id):
                     raise NotFoundError("monitor not found")
+                self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.NO_CONTENT), None)
                 self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
                 return
             raise NotFoundError("route not found")
         except AgentWebError as error:
+            self._release_idempotency(principal, idempotency_key, request_hash)
             self._error(error, request_id)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -198,40 +297,53 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         principal = self._authenticate(scope, request_id)
         if principal is None:
             return
+        idempotency_key = None
+        request_hash = None
         try:
             payload = self._read_json()
+            if path in {"/solve", "/observe", "/admin/keys"}:
+                idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
+                if idempotency_key and request_hash is None:
+                    return
+            response_status = HTTPStatus.OK
+            response_payload: dict | list | None
             if path == "/solve":
-                response = self.engine.solve(payload.get("task", ""), payload.get("mode", "focus"), principal.org_id)
-                self._send_json(HTTPStatus.OK, response.to_dict(), request_id)
+                response_payload = self.engine.solve(payload.get("task", ""), payload.get("mode", "focus"), principal.org_id).to_dict()
             elif path == "/observe":
                 monitor = self.engine.create_monitor(
                     payload.get("task", ""), payload.get("frequency", "hourly"), payload.get("webhook_url"), principal.org_id
                 )
-                self._send_json(HTTPStatus.OK, monitor.to_dict(), request_id)
+                response_payload = monitor.to_dict()
             elif path == "/search":
                 query = payload.get("query", "")
-                self._send_json(HTTPStatus.OK, {"query": query, "results": search(query, payload.get("limit", 10))}, request_id)
+                response_payload = {"query": query, "results": search(query, payload.get("limit", 10))}
             elif path == "/extract":
-                self._send_json(HTTPStatus.OK, self.engine.extract(payload.get("url", ""), payload.get("schema")), request_id)
+                response_payload = self.engine.extract(payload.get("url", ""), payload.get("schema"))
             elif path == "/crawl":
                 result = self.engine.crawler.crawl(
                     payload.get("start_url", ""), payload.get("max_pages", 50), payload.get("depth", 2), payload.get("url_pattern")
                 )
-                self._send_json(HTTPStatus.OK, result.to_dict(), request_id)
+                response_payload = result.to_dict()
             elif path == "/browser/sessions":
                 session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id)
-                self._send_json(HTTPStatus.OK, session.to_dict(), request_id)
-            elif path == "/admin/keys":
-                created = self.authenticator.key_store.create_key(principal.org_id, payload.get("scopes", []), principal.key_id)
-                self._send_json(HTTPStatus.CREATED, created, request_id)
+                response_payload = session.to_dict()
+            else:
+                response_status = HTTPStatus.CREATED
+                response_payload = self.authenticator.key_store.create_key(principal.org_id, payload.get("scopes", []), principal.key_id)
+            self._complete_idempotency(principal, idempotency_key, request_hash, int(response_status), response_payload)
+            self._send_json(response_status, response_payload, request_id)
         except AgentWebError as error:
+            self._release_idempotency(principal, idempotency_key, request_hash)
             self._error(error, request_id)
         except (ValueError, TypeError) as error:
+            self._release_idempotency(principal, idempotency_key, request_hash)
             self._error(InvalidRequestError(str(error)), request_id)
         except RuntimeError as error:
+            self._release_idempotency(principal, idempotency_key, request_hash)
             from .errors import UpstreamError
             self._error(UpstreamError(str(error)), request_id)
         except Exception as error:  # defensive API boundary; details stay local
+            self._release_idempotency(principal, idempotency_key, request_hash)
             from .errors import AgentWebError as InternalError
             self._error(InternalError(str(error)), request_id)
 

@@ -5,9 +5,10 @@ Base URL: `https://api.agentweb.dev/v1`
 | Method | Path | Description |
 |---|---|---|
 | POST | `/solve` | Run a one-shot grounded research task |
-| POST | `/observe` | Create a recurring monitor |
+| GET | `/observe` | List organization monitors with cursor pagination |
+| POST | `/observe` | Create a recurring monitor; supports idempotency |
 | GET | `/observe/{id}` | Get monitor status/history |
-| DELETE | `/observe/{id}` | Cancel a monitor |
+| DELETE | `/observe/{id}` | Cancel a monitor; supports idempotency |
 | POST | `/search` | Low-level search |
 | POST | `/crawl` | Low-level crawl |
 | POST | `/browser/sessions` | Open a browser session |
@@ -18,7 +19,10 @@ Base URL: `https://api.agentweb.dev/v1`
 | POST | `/plan` | Produce a plan without executing |
 | POST | `/execute` | Execute a previously produced plan |
 | GET | `/report/{execution_id}` | Retrieve an execution graph |
-| GET | `/admin/keys` | Manage API keys |
-| GET | `/admin/usage` | View usage and billing |
+| GET | `/admin/keys` | List redacted API keys with cursor pagination |
+| POST | `/admin/keys` | Create an API key with idempotency support |
+| DELETE | `/admin/keys/{id}` | Revoke an API key with idempotency support |
+| GET | `/admin/audit` | List immutable security events with cursor pagination |
+| GET | `/admin/usage` | View organization usage and estimated billing |
 
-Full request/response schemas are in [reference/](reference/search.md).
+List endpoints use the opaque `cursor` and bounded `limit` query parameters described in [pagination.md](pagination.md). Full request/response schemas are in [reference/](reference/search.md). Graph, plan, and execute routes remain roadmap work and are not exposed by the current OpenAPI contract.

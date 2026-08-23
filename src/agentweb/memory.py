@@ -76,6 +76,29 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_org_due
                     ON scheduler_jobs(org_id, status, run_at, priority);
+                CREATE TABLE IF NOT EXISTS idempotency_records (
+                    org_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    request_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    response_status INTEGER,
+                    response_body TEXT,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    PRIMARY KEY(org_id, idempotency_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_idempotency_expiry
+                    ON idempotency_records(expires_at);
+                CREATE TABLE IF NOT EXISTS usage_records (
+                    org_id TEXT NOT NULL,
+                    period TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    cost REAL NOT NULL DEFAULT 0,
+                    PRIMARY KEY(org_id, period, mode)
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_org_period
+                    ON usage_records(org_id, period);
                 """
             )
             monitor_columns = {row[1] for row in connection.execute("PRAGMA table_info(monitors)")}
@@ -112,6 +135,72 @@ class MemoryStore:
 
     def get_snapshot(self, key: str, org_id: str = "development") -> dict[str, str] | None:
         return self.get_latest(key, org_id)
+
+    def claim_idempotency(self, org_id: str, idempotency_key: str, request_hash: str, ttl_seconds: int = 86400) -> dict[str, Any] | None:
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute("DELETE FROM idempotency_records WHERE expires_at <= ?", (now,))
+            inserted = connection.execute(
+                "INSERT OR IGNORE INTO idempotency_records(org_id, idempotency_key, request_hash, status, created_at, expires_at) "
+                "VALUES (?, ?, ?, 'in_progress', ?, ?)",
+                (org_id, idempotency_key, request_hash, now, now + ttl_seconds),
+            ).rowcount
+            if inserted:
+                return None
+            row = connection.execute(
+                "SELECT org_id, idempotency_key, request_hash, status, response_status, response_body, created_at, expires_at "
+                "FROM idempotency_records WHERE org_id = ? AND idempotency_key = ?",
+                (org_id, idempotency_key),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def complete_idempotency(self, org_id: str, idempotency_key: str, request_hash: str, response_status: int, response_body: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE idempotency_records SET status='completed', response_status=?, response_body=? "
+                "WHERE org_id=? AND idempotency_key=? AND request_hash=? AND status='in_progress'",
+                (response_status, response_body, org_id, idempotency_key, request_hash),
+            )
+
+    def release_idempotency(self, org_id: str, idempotency_key: str, request_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM idempotency_records WHERE org_id=? AND idempotency_key=? AND request_hash=? AND status='in_progress'",
+                (org_id, idempotency_key, request_hash),
+            )
+
+    @staticmethod
+    def _usage_cost(mode: str) -> float:
+        return {"flash": 0.01, "focus": 0.05, "dive": 0.20, "monitor_checks": 0.01}.get(mode, 0.0)
+
+    def record_usage(self, org_id: str, mode: str, count: int = 1, now: float | None = None) -> None:
+        if count <= 0:
+            return
+        normalized = "monitor_checks" if mode in {"monitor", "monitor_checks"} else mode
+        if normalized not in {"flash", "focus", "dive", "monitor_checks"}:
+            raise ValueError("usage mode is not supported")
+        period = time.strftime("%Y-%m", time.gmtime(time.time() if now is None else now))
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO usage_records(org_id, period, mode, count, cost) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(org_id, period, mode) DO UPDATE SET count=count+excluded.count, cost=cost+excluded.cost",
+                (org_id, period, normalized, count, count * self._usage_cost(normalized)),
+            )
+
+    def usage_summary(self, org_id: str, period: str | None = None) -> dict[str, Any]:
+        period = period or time.strftime("%Y-%m", time.gmtime())
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT mode, count, cost FROM usage_records WHERE org_id=? AND period=?",
+                (org_id, period),
+            ).fetchall()
+        counts = {mode: 0 for mode in ("flash", "focus", "dive", "monitor_checks")}
+        estimated_cost = 0.0
+        for row in rows:
+            if row["mode"] in counts:
+                counts[row["mode"]] = int(row["count"])
+                estimated_cost += float(row["cost"])
+        return {"period": period, "requests_by_mode": counts, "estimated_cost": round(estimated_cost, 2)}
 
     def list_snapshots(self, target: str, org_id: str = "development") -> list[dict[str, str]]:
         with self._connect() as connection:
@@ -184,6 +273,15 @@ class MemoryStore:
                 "attempts, max_attempts, last_error, created_at, updated_at) VALUES(?, ?, 'monitor_check', ?, ?, 'pending', ?, NULL, 0, 5, NULL, ?, ?)",
                 ("job_" + uuid.uuid4().hex[:16], monitor.org_id, monitor.id, self._frequency_priority(monitor.frequency), now, now, now),
             )
+
+    def list_monitors(self, org_id: str = "development") -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, org_id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, last_event, last_error "
+                "FROM monitors WHERE org_id=? ORDER BY id ASC",
+                (org_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_monitor(self, monitor_id: str, org_id: str = "development") -> Monitor | None:
         with self._connect() as connection:

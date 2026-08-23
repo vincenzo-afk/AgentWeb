@@ -1,6 +1,6 @@
 # Pagination
 
-List endpoints (e.g., listing monitors, listing graph query results) use cursor-based pagination.
+List endpoints such as `/observe`, `/memory/{target}`, `/admin/keys`, and `/admin/audit` use cursor-based pagination. Graph query pagination remains deferred with the graph feature.
 
 ```json
 {
@@ -10,7 +10,7 @@ List endpoints (e.g., listing monitors, listing graph query results) use cursor-
 }
 ```
 
-Request the next page with:
+The first request may include `limit` from 1 through 100. The response returns the compatibility field for the resource plus the standard `data`, `next_cursor`, and `has_more` fields. Request the next page with:
 
 ```
 GET /observe?cursor=eyJvZmZzZXQiOjEwMH0=

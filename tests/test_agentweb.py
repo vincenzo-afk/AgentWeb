@@ -405,6 +405,63 @@ class AgentWebTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_http_idempotency_replays_and_conflicts(self):
+        data_path = Path(self.temp_dir.name) / "idempotency.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            body = json.dumps({"task": f"Summarize {self.url}", "mode": "flash", "idempotency_key": "solve-1"}).encode()
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {admin}"}
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=body, method="POST", headers=headers)) as response:
+                first = json.loads(response.read())
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=body, method="POST", headers=headers)) as response:
+                replay = json.loads(response.read())
+            self.assertEqual(first["execution_id"], replay["execution_id"])
+            conflict_body = json.dumps({"task": "different", "mode": "flash", "idempotency_key": "solve-1"}).encode()
+            with self.assertRaises(Exception) as context:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=conflict_body, method="POST", headers=headers))
+            self.assertIn("409", str(context.exception))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_usage_and_cursor_paginated_monitors(self):
+        data_path = Path(self.temp_dir.name) / "usage.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {admin}"}
+            for suffix in ("/one", "/two"):
+                body = json.dumps({"task": f"Watch {self.url}{suffix}", "frequency": "daily"}).encode()
+                with urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe", data=body, method="POST", headers=headers)):
+                    pass
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe?limit=1", headers=headers)) as response:
+                first_page = json.loads(response.read())
+            self.assertEqual(len(first_page["data"]), 1)
+            self.assertTrue(first_page["has_more"])
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe?limit=1&cursor={first_page['next_cursor']}", headers=headers)) as response:
+                second_page = json.loads(response.read())
+            self.assertEqual(len(second_page["data"]), 1)
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=json.dumps({"task": f"Summarize {self.url}", "mode": "focus"}).encode(), method="POST", headers=headers)):
+                pass
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/usage", headers=headers)) as response:
+                usage = json.loads(response.read())
+            self.assertEqual(usage["requests_by_mode"]["focus"], 1)
+            self.assertEqual(usage["requests_by_mode"]["flash"], 0)
+            with self.assertRaises(Exception) as period_error:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/usage?period=bad", headers=headers))
+            self.assertIn("400", str(period_error.exception))
+            with self.assertRaises(Exception) as cursor_error:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe?cursor=not-valid", headers=headers))
+            self.assertIn("400", str(cursor_error.exception))
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_http_scope_auth_rejects_missing_scope(self):
         os.environ["AGENTWEB_API_KEYS"] = json.dumps({"search-only": ["search:read"]})
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "auth.sqlite3"))

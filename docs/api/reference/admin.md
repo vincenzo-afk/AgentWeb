@@ -20,6 +20,8 @@ Returns immutable organization-scoped security events such as `api_key.created` 
 
 ## `GET /admin/usage`
 
+Returns organization-scoped usage and local estimated billing data. If `period` is omitted, the current UTC month is used. The local MVP records one request for each completed solve and one check for each active monitor attempt; the estimate uses deterministic mode heuristics and is not an external provider invoice.
+
 Returns usage and billing data:
 
 ```json
@@ -30,4 +32,4 @@ Returns usage and billing data:
 }
 ```
 
-See [operations/cost-controls.md](../../operations/cost-controls.md) for managing spend, and [security/secrets-management.md](../../security/secrets-management.md) for key handling guidance.
+List responses from `/admin/keys` and `/admin/audit` include `data`, `next_cursor`, and `has_more`; pass the returned cursor unchanged to request the next page. See [operations/cost-controls.md](../../operations/cost-controls.md) for managing spend, and [security/secrets-management.md](../../security/secrets-management.md) for key handling guidance.

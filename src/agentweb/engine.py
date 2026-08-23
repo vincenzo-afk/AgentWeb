@@ -212,6 +212,7 @@ class AgentWebEngine:
             insufficient = True
         spans.append(self._span("synthesis", "synthesize", time.time(), "complete", task, f"{len(citations)} citation(s)"))
         self.traces.save(execution_id, spans, org_id=org_id)
+        self.memory.record_usage(org_id, mode)
         return SolveResponse(
             execution_id=execution_id,
             mode=mode,
@@ -252,6 +253,7 @@ class AgentWebEngine:
             monitor.last_error = "monitor task does not include a direct URL"
             self.memory.update_monitor(monitor)
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.task, monitor.last_error)], org_id=monitor.org_id)
+            self.memory.record_usage(monitor.org_id, "monitor_checks")
             return monitor
         decision = self.trust_engine.should_fetch(monitor.target_url)
         if not decision.allowed:
@@ -259,6 +261,7 @@ class AgentWebEngine:
             monitor.last_error = decision.reason
             self.memory.update_monitor(monitor)
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
+            self.memory.record_usage(monitor.org_id, "monitor_checks")
             return monitor
         result = fetch_url(monitor.target_url)
         if result.error:
@@ -266,6 +269,7 @@ class AgentWebEngine:
             monitor.last_error = result.error
             self.memory.update_monitor(monitor)
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
+            self.memory.record_usage(monitor.org_id, "monitor_checks")
             return monitor
         monitor.last_error = None
         content = html_to_text(result.body)
@@ -300,4 +304,5 @@ class AgentWebEngine:
                         monitor.last_error = delivery.error or "webhook delivery failed"
         self.memory.update_monitor(monitor)
         self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_event)], org_id=monitor.org_id)
+        self.memory.record_usage(monitor.org_id, "monitor_checks")
         return monitor
