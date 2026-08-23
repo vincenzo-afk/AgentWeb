@@ -15,14 +15,15 @@ Base URL: `https://api.agentweb.dev/v1`
 | POST | `/extract` | Structured extraction from a page or document |
 | GET | `/memory/{target}` | Retrieve stored snapshots for a target |
 | GET | `/memory/{target}/diff` | Compute diff between snapshots |
-| GET | `/graph/query` | Query the knowledge graph |
-| POST | `/plan` | Produce a plan without executing |
-| POST | `/execute` | Execute a previously produced plan |
 | GET | `/report/{execution_id}` | Retrieve an execution graph |
 | GET | `/admin/keys` | List redacted API keys with cursor pagination |
 | POST | `/admin/keys` | Create an API key with idempotency support |
 | DELETE | `/admin/keys/{id}` | Revoke an API key with idempotency support |
 | GET | `/admin/audit` | List immutable security events with cursor pagination |
 | GET | `/admin/usage` | View organization usage and estimated billing |
+| DELETE | `/admin/data` | Delete organization-owned snapshots and execution traces; supports idempotency |
+| GET | `/admin/metrics` | Read organization-scoped operational metrics |
 
-List endpoints use the opaque `cursor` and bounded `limit` query parameters described in [pagination.md](pagination.md). Full request/response schemas are in [reference/](reference/search.md). Graph, plan, and execute routes remain roadmap work and are not exposed by the current OpenAPI contract.
+List endpoints use the opaque `cursor` and bounded `limit` query parameters described in [pagination.md](pagination.md). Full request/response schemas are in [reference/](reference/search.md).
+
+The following roadmap capabilities are intentionally not exposed by the current API: `GET /graph/query`, `POST /plan`, and `POST /execute`. They remain gated by the Phase 2 and Phase 3 roadmap decisions.

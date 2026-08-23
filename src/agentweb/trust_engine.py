@@ -24,6 +24,12 @@ class TrustEngine:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             return GateDecision(False, "only absolute http and https URLs are allowed")
+        if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+            return GateDecision(False, "URL credentials are not accepted")
+        try:
+            _ = parsed.port
+        except ValueError:
+            return GateDecision(False, "URL port is invalid")
         host = parsed.hostname.lower().strip(".")
         if host in self.blocked_domains or any(host.endswith("." + domain) for domain in self.blocked_domains):
             return GateDecision(False, "target domain is blocked by the trust engine")

@@ -96,6 +96,24 @@ def _render_timeline(task: str, sources: list[Source], conflicts: list[dict[str,
     return answer, {"task": task, "items": items, "conflicts": conflicts}
 
 
+def _claim_citations(answer: str, selected: list[Source]) -> list[Citation]:
+    """Map each non-empty rendered line to source IDs with exact answer offsets."""
+    source_ids = sorted(source.id for source in selected)
+    citations: list[Citation] = []
+    offset = 0
+    for line in answer.splitlines(keepends=True):
+        content = line.rstrip("\\r\\n")
+        if content.strip():
+            ids = source_ids
+            match = re.match(r"^\\s*(\\d+)\\.\\s", content)
+            if match:
+                index = int(match.group(1)) - 1
+                ids = [selected[index].id] if 0 <= index < len(selected) else source_ids
+            citations.append(Citation(claim_span=[offset, offset + len(content)], source_ids=ids))
+        offset += len(line)
+    return citations
+
+
 def synthesize(ranked_sources: list[RankedSource], task: str, output_format: str = "text") -> SynthesisResult:
     """Produce a deterministic answer whose claims are covered by source citations."""
     if output_format not in SUPPORTED_OUTPUT_FORMATS:
@@ -133,7 +151,7 @@ def synthesize(ranked_sources: list[RankedSource], task: str, output_format: str
 
     selected_ids = {source.id for source in selected}
     sources = [replace(source, cited=source.id in selected_ids) for source in considered]
-    citations = [Citation(claim_span=[0, len(answer)], source_ids=sorted(selected_ids))]
+    citations = _claim_citations(answer, selected)
     return SynthesisResult(
         answer=answer,
         sources=sources,

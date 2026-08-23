@@ -22,6 +22,7 @@ from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
 from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError
+from agentweb.trace import Span
 from agentweb.search import JsonSearchProvider, SearchProviderConfig, search
 from agentweb.synthesis import synthesize
 from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
@@ -29,6 +30,7 @@ from agentweb.normalizer import normalize
 from agentweb.parser import parse
 from agentweb.ranking import RankedSource, rank
 from agentweb.trust_engine import TrustEngine
+from agentweb.redaction import redact_text
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -73,6 +75,11 @@ class AgentWebTests(unittest.TestCase):
 
     def test_html_to_text_removes_scripts(self):
         self.assertEqual(html_to_text("<p>Hello</p><script>ignore()</script>"), "Hello")
+
+    def test_parser_extracts_tables_and_entities(self):
+        document = parse(b"<h1>Acme Corp</h1><table><tr><th>Product</th><th>Price</th></tr><tr><td>Widget</td><td>$10</td></tr></table>", "text/html")
+        self.assertEqual(document.tables, [[['Product', 'Price'], ['Widget', '$10']]])
+        self.assertIn("Acme Corp", document.entities)
 
     def test_parser_extracts_title_links_and_json(self):
         document = parse(b"<title>Page</title><p>Hello</p><a href='/next'>Next</a>", "text/html")
@@ -155,6 +162,19 @@ class AgentWebTests(unittest.TestCase):
         self.assertGreater(price.confidence, normalize("unknown", "price").confidence)
         self.assertFalse(normalize("unknown", "price").normalized)
 
+    def test_safe_url_validation_rejects_credentials_and_redirects_are_rechecked(self):
+        os.environ.pop("AGENTWEB_ALLOW_PRIVATE_TARGETS", None)
+        with self.assertRaisesRegex(ValueError, "credentials"):
+            __import__("agentweb.fetch", fromlist=["validate_url"]).validate_url("https://user:secret@example.com/path")
+        self.assertFalse(TrustEngine().should_fetch("https://user:secret@example.com/path").allowed)
+
+    def test_diagnostic_redaction_removes_embedded_secrets(self):
+        value = "Authorization: Bearer sk-live-super-secret https://example.test/hook?token=hidden"
+        redacted = redact_text(value)
+        self.assertNotIn("super-secret", redacted)
+        self.assertNotIn("hidden", redacted)
+        self.assertIn("[REDACTED]", redacted)
+
     def test_trust_engine_blocks_private_by_default_and_allows_explicit_fixture_mode(self):
         os.environ.pop("AGENTWEB_ALLOW_PRIVATE_TARGETS", None)
         self.assertFalse(TrustEngine().should_fetch("http://127.0.0.1:8000").allowed)
@@ -167,6 +187,27 @@ class AgentWebTests(unittest.TestCase):
             __import__("agentweb.models", fromlist=["Source"]).Source("b", "https://b.example", trust_score=0.9),
         ]
         self.assertEqual(rank(sources, "research task")[0].source.id, "b")
+
+    def test_memory_reuse_retention_and_trace_deletion(self):
+        from datetime import datetime, timezone
+        now = 1_800_000_000.0
+        fresh_at = datetime.fromtimestamp(now - 60, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        old_at = datetime.fromtimestamp(now - 200, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        self.store.snapshot("target", "old", old_at, "org-a")
+        self.store.snapshot("target", "fresh", fresh_at, "org-a")
+        self.assertEqual(self.store.reusable_snapshot("target", "org-a", 120, now)["content"], "fresh")
+        self.assertEqual(self.store.purge_expired_snapshots(100, now, "org-a"), 1)
+        self.engine.traces.save("exec-a", [Span("test", "save", 0, 1, "token=hidden", "https://example.test/?secret=hidden")], org_id="org-a")
+        stored = self.engine.traces.get("exec-a", "org-a")
+        self.assertNotIn("hidden", json.dumps(stored))
+        self.assertEqual(self.engine.traces.delete("org-a", "exec-a"), 1)
+        self.assertIsNone(self.engine.traces.get("exec-a", "org-a"))
+
+    def test_ranking_consumes_recency_and_extraction_confidence(self):
+        from agentweb.models import Source
+        newer = Source("new", "https://new.example", "Fresh", "current", trust_score=0.6, published_at="2099-01-01T00:00:00Z", content_type="text/html", extraction_confidence=1.0)
+        older = Source("old", "https://old.example", "Old", "current", trust_score=0.6, published_at="2020-01-01T00:00:00Z", content_type="application/octet-stream", extraction_confidence=0.1)
+        self.assertEqual(rank([older, newer], "current")[0].source.id, "new")
 
     def test_snapshot_history_and_diff(self):
         self.assertFalse(self.store.save_snapshot("target", self.url, "first", "now"))
@@ -210,7 +251,8 @@ class AgentWebTests(unittest.TestCase):
         self.assertFalse(result.insufficient_evidence)
         self.assertEqual(result.output_format, "comparison")
         self.assertEqual({source.id for source in result.sources if source.cited}, {"src-a", "src-b"})
-        self.assertEqual(result.citations[0].source_ids, ["src-a", "src-b"])
+        self.assertTrue(result.citations)
+        self.assertTrue(all(item.claim_span[1] > item.claim_span[0] and item.source_ids for item in result.citations))
         self.assertIn("price", {item["field"] for item in result.conflicts or []})
         self.assertIn("Conflicts", result.answer)
 
@@ -248,6 +290,19 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(second.last_event, "change_detected")
         self.assertIsNotNone(second.last_change_at)
         self.assertTrue(self.store.delete_monitor(monitor.id))
+        FixtureHandler.body = b"<html><head><title>Fixture</title></head><body>restored</body></html>"
+
+    def test_monitor_task_aware_price_policy_ignores_irrelevant_changes(self):
+        FixtureHandler.body = b"<html><body>Widget price $10. Stable description.</body></html>"
+        monitor = self.engine.create_monitor(f"Watch price for {self.url}", "hourly")
+        first = self.engine.check_monitor(monitor)
+        self.assertEqual(first.last_event, "no_change")
+        FixtureHandler.body = b"<html><body>Widget price $10. Different navigation text.</body></html>"
+        second = self.engine.check_monitor(first)
+        self.assertEqual(second.last_event, "no_change")
+        FixtureHandler.body = b"<html><body>Widget price $11. Different navigation text.</body></html>"
+        third = self.engine.check_monitor(second)
+        self.assertEqual(third.last_event, "change_detected")
         FixtureHandler.body = b"<html><head><title>Fixture</title></head><body>restored</body></html>"
 
     def test_monitor_unreachable_is_check_failed(self):
@@ -326,7 +381,8 @@ class AgentWebTests(unittest.TestCase):
         result = None
         for _ in range(5):
             result = self.engine.scheduler.run_once(now)
-            now += 60
+            job = self.store.get_job(next(item["id"] for item in self.store.list_jobs("pending", "development") if item["job_type"] == "webhook_delivery"), "development") if result["status"] != "dead_letter" else None
+            now = (job["run_at"] + 1) if job else now + 60
         self.assertEqual(result["status"], "dead_letter")
         refreshed = self.store.get_monitor(monitor.id, "development")
         self.assertEqual(refreshed.last_delivery_status, "dead_letter")
@@ -578,6 +634,34 @@ class AgentWebTests(unittest.TestCase):
             with self.assertRaises(Exception) as context:
                 urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=conflict_body, method="POST", headers=headers))
             self.assertIn("409", str(context.exception))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_rate_limit_headers_and_data_deletion(self):
+        data_path = Path(self.temp_dir.name) / "headers.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            headers = {"Authorization": f"Bearer {admin}", "Content-Type": "application/json"}
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/usage", headers=headers)) as response:
+                self.assertIn("X-RateLimit-Limit", response.headers)
+                self.assertIn("X-RateLimit-Remaining", response.headers)
+                self.assertIn("X-RateLimit-Reset", response.headers)
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/metrics", headers=headers)) as response:
+                metrics = json.loads(response.read())
+            self.assertIn("counters", metrics)
+            self.assertIn("observations", metrics)
+            trace = server.engine.solve(f"Summarize {self.url}", org_id="org-a")
+            server.engine.memory.snapshot(self.url, "content", "2026-08-24T00:00:00Z", "org-a")
+            body = json.dumps({"kind": "all", "idempotency_key": "delete-1"}).encode()
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/data", data=body, method="DELETE", headers=headers)) as response:
+                deleted = json.loads(response.read())
+            self.assertEqual(deleted["deleted_snapshots"], 2)
+            self.assertEqual(deleted["deleted_traces"], 1)
+            self.assertIsNone(server.engine.traces.get(trace.execution_id, "org-a"))
         finally:
             server.shutdown()
             server.server_close()

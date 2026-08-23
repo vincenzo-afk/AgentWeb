@@ -10,6 +10,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import math
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -298,12 +299,16 @@ class RateLimiter:
         self._buckets: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
 
-    def check(self, key_id: str, weight: float = 1.0, bucket: str = "interactive") -> None:
+    def check(self, key_id: str, weight: float = 1.0, bucket: str = "interactive") -> dict[str, int | float]:
         now = time.monotonic()
         bucket_key = f"{bucket}:{key_id}"
         with self._lock:
             tokens, updated = self._buckets.get(bucket_key, (self.capacity, now))
             tokens = min(self.capacity, tokens + (now - updated) * self.refill_per_second)
             if tokens < weight:
-                raise RateLimitError("rate limit exceeded")
-            self._buckets[bucket_key] = (tokens - weight, now)
+                retry_after = math.ceil((weight - tokens) / self.refill_per_second) if self.refill_per_second else 60
+                raise RateLimitError("rate limit exceeded", retry_after=max(1, retry_after))
+            remaining = max(0.0, tokens - weight)
+            self._buckets[bucket_key] = (remaining, now)
+            reset = math.ceil((self.capacity - remaining) / self.refill_per_second) if self.refill_per_second else 0
+            return {"limit": self.capacity, "remaining": remaining, "reset": int(time.time()) + max(0, reset)}

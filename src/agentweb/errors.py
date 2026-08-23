@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .redaction import redact_text
+
 
 class AgentWebError(Exception):
     """Base error with a stable API-facing type and HTTP status."""
@@ -16,7 +18,7 @@ class AgentWebError(Exception):
         self.request_id = request_id
 
     def as_dict(self) -> dict:
-        error = {"type": self.error_type, "message": self.message}
+        error = {"type": self.error_type, "message": redact_text(self.message)}
         if self.request_id:
             error["request_id"] = self.request_id
         return {"error": error}
@@ -51,6 +53,10 @@ class RateLimitError(AgentWebError):
     error_type = "rate_limit_error"
     status_code = 429
     retryable = True
+
+    def __init__(self, message: str, *, retry_after: int | None = None, request_id: str | None = None) -> None:
+        super().__init__(message, request_id=request_id)
+        self.retry_after = retry_after
 
 
 class UpstreamError(AgentWebError):

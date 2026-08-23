@@ -3,6 +3,8 @@
 from .api import create_server
 from .browser import BrowserEngine, BrowserSession
 from .engine import AgentWebEngine
+from .maintenance import purge_retention
+from .metrics import MetricsRegistry
 from .scheduler import Scheduler
 from .rdbms import DatabaseConfig, PostgresRelationalStore, open_relational_store
 from .search import JsonSearchProvider, SearchProviderConfig, SearchProviderError, build_search_provider, search
@@ -11,6 +13,8 @@ from .synthesis import SynthesisResult, synthesize
 
 __all__ = [
     "AgentWebEngine",
+    "MetricsRegistry",
+    "purge_retention",
     "BrowserEngine",
     "BrowserSession",
     "JsonSearchProvider",
@@ -29,4 +33,4 @@ __all__ = [
     "build_search_provider",
     "search",
 ]
-__version__ = "0.8.0"
+__version__ = "0.9.0"

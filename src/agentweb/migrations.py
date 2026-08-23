@@ -109,6 +109,11 @@ def export_sqlite_relational(source_path: str | Path, output_dir: str | Path, dr
     return manifest
 
 
+def _migration_version(manifest: dict[str, Any]) -> str:
+    digest = hashlib.sha256(_canonical_row(manifest.get("tables", [])).encode("utf-8")).hexdigest()[:32]
+    return f"relational-v1:{digest}"
+
+
 def _validate_manifest(export_dir: Path) -> dict[str, Any]:
     manifest_path = export_dir / "manifest.json"
     if not manifest_path.exists():
@@ -169,11 +174,12 @@ def import_postgres_relational(export_dir: str | Path, store: PostgresRelational
     if dry_run:
         return {"status": "dry_run", "tables": manifest["tables"]}
     store.bootstrap()
+    version = _migration_version(manifest)
     with store.connection() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT version FROM schema_migrations WHERE version=%s", ("relational-v1",))
+            cursor.execute("SELECT version FROM schema_migrations WHERE version=%s", (version,))
             if cursor.fetchone():
-                return {"status": "already_applied", "version": "relational-v1"}
+                return {"status": "already_applied", "version": version}
             for item in manifest["tables"]:
                 table = item["table"]
                 columns = RELATIONAL_TABLES.get(table)
@@ -189,5 +195,11 @@ def import_postgres_relational(export_dir: str | Path, store: PostgresRelational
                             f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
                             _prepare_row(table, row),
                         )
-            cursor.execute("INSERT INTO schema_migrations(version) VALUES (%s)", ("relational-v1",))
-    return {"status": "applied", "version": "relational-v1", "tables": manifest["tables"]}
+            # Explicitly imported BIGSERIAL values do not advance PostgreSQL's
+            # sequence automatically; reset it before future attempt inserts.
+            cursor.execute(
+                "SELECT setval(pg_get_serial_sequence('webhook_delivery_attempts', 'id'), "
+                "COALESCE(MAX(id), 1), COUNT(*) > 0) FROM webhook_delivery_attempts"
+            )
+            cursor.execute("INSERT INTO schema_migrations(version) VALUES (%s)", (version,))
+    return {"status": "applied", "version": version, "tables": manifest["tables"]}

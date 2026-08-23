@@ -8,16 +8,18 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from .alerting import send_webhook
+from .alerting import DeliveryResult, send_webhook
 from .browser import BrowserEngine
 from .crawler import Crawler
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .memory import MemoryStore
+from .metrics import MetricsRegistry
 from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .synthesis import synthesize
 from .parser import parse
 from .ranking import rank
+from .redaction import redact_text, redact_url
 from .scheduler import Scheduler
 from .search import SearchProvider, build_search_provider, search
 from .secrets import SecretProvider, build_provider
@@ -35,6 +37,7 @@ class AgentWebEngine:
         search_provider: SearchProvider | None = None,
     ) -> None:
         self.memory = memory or MemoryStore()
+        self.metrics = MetricsRegistry()
         self.secret_provider = secret_provider or build_provider()
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
         self.traces = TraceStore(self.memory.path)
@@ -71,15 +74,41 @@ class AgentWebEngine:
             start_time=started,
             end_time=time.time(),
             status=status,
-            input_summary=input_summary[:240],
-            output_summary=output_summary[:240],
+            input_summary=redact_text(input_summary),
+            output_summary=redact_text(output_summary),
         )
 
-    def _source_from_url(self, url: str) -> Source | None:
+    @staticmethod
+    def _reuse_window(task: str) -> int:
+        lowered = task.lower()
+        if any(term in lowered for term in ("price", "cost", "stock", "availability", "available", "sale")):
+            return 3_600
+        if any(term in lowered for term in ("latest", "today", "current", "breaking")):
+            return 900
+        if any(term in lowered for term in ("history", "historical", "background")):
+            return 7 * 86_400
+        return 86_400
+
+    def _source_from_snapshot(self, snapshot: dict[str, str]) -> Source | None:
+        content = snapshot.get("content", "")
+        surface = self.trust_engine.should_surface(content)
+        if not surface.allowed:
+            return None
+        return Source(
+            id=self._source_id(snapshot["target"]),
+            url=snapshot["target"],
+            title="",
+            snippet=content[:240],
+            trust_score=self._trust_score(snapshot["target"]),
+            content_type="text/plain",
+            extraction_confidence=0.70,
+        )
+
+    def _source_from_url(self, url: str, org_id: str = "development") -> Source | None:
         decision = self.trust_engine.should_fetch(url)
         if not decision.allowed:
             return None
-        result = fetch_url(url)
+        result = fetch_url(url, trust_engine=self.trust_engine)
         if result.error and not result.body:
             return None
         parsed = parse(result.body.encode("utf-8"), result.content_type)
@@ -90,12 +119,15 @@ class AgentWebEngine:
         surface = self.trust_engine.should_surface(text)
         if not surface.allowed:
             return None
+        self.memory.snapshot(url, text, utc_now(), org_id)
         return Source(
-            id=self._source_id(url),
+            id=self._source_id(result.url),
             url=result.url,
             title=title,
             snippet=text[:240],
             trust_score=self._trust_score(result.url, title),
+            content_type=result.content_type,
+            extraction_confidence=round(0.85 if text else 0.20, 2),
         )
 
     def browser_open(self, url: str, actions: list[dict] | None = None, org_id: str = "development"):
@@ -106,7 +138,7 @@ class AgentWebEngine:
             session = self.browser.open(url, actions)
             self.traces.save(
                 execution_id,
-                [self._span("browser", "open", started, session.status, url, f"{len(session.actions)} action(s)")],
+                [self._span("browser", "open", started, session.status, redact_url(url), f"{len(session.actions)} action(s)")],
                                     status=session.status,
                     org_id=org_id,
                 )
@@ -115,7 +147,7 @@ class AgentWebEngine:
         except Exception as error:
             self.traces.save(
                 execution_id,
-                [self._span("browser", "open", started, "failed", url, str(error))],
+                [self._span("browser", "open", started, "failed", redact_url(url), redact_text(str(error)))],
                                     status="failed",
                     org_id=org_id,
                 )
@@ -127,9 +159,9 @@ class AgentWebEngine:
         decision = self.trust_engine.should_fetch(url)
         if not decision.allowed:
             raise RuntimeError(decision.reason or "URL rejected by trust engine")
-        result = fetch_url(url)
+        result = fetch_url(url, trust_engine=self.trust_engine)
         if result.error:
-            raise RuntimeError(f"could not fetch URL: {result.error}")
+            raise RuntimeError(f"could not fetch URL: {redact_text(result.error)}")
         parsed = parse(result.body.encode("utf-8"), result.content_type)
         title = parsed.title
         description = extract_metadata(result.body)[1]
@@ -145,6 +177,11 @@ class AgentWebEngine:
             "text": round(base_confidence, 2),
             "links": 0.85 if parsed.links else 0.20,
         }
+        source_spans = []
+        if title:
+            source_spans.append({"field": "title", "source": "title", "span": [0, len(title)], "value": title})
+        if text:
+            source_spans.append({"field": "text", "source": "text", "span": [0, min(len(text), 200)], "value": text[:200]})
         data = {
             "url": result.url,
             "status": result.status,
@@ -152,6 +189,9 @@ class AgentWebEngine:
             "description": description,
             "text": text,
             "links": parsed.links,
+            "tables": parsed.tables,
+            "entities": parsed.entities,
+            "source_spans": source_spans,
             "parse_warnings": parsed.parse_warnings,
             "field_confidence": field_confidence,
             "confidence": round(sum(field_confidence.values()) / len(field_confidence), 2),
@@ -163,7 +203,10 @@ class AgentWebEngine:
             for field, expected_type in requested_schema.items():
                 candidate = title if field.lower() == "title" else text[:200]
                 normalized_field = normalize(candidate, str(expected_type))
-                structured[field] = normalized_field.__dict__
+                structured[field] = {
+                    **normalized_field.__dict__,
+                    "source_span": {"source": "title" if field.lower() == "title" else "text", "span": [0, len(candidate)], "value": candidate},
+                }
             data["data"] = structured
             data["field_confidence"].update({field: value["confidence"] for field, value in structured.items()})
             data["confidence"] = round(sum(data["field_confidence"].values()) / len(data["field_confidence"]), 2)
@@ -182,17 +225,20 @@ class AgentWebEngine:
         requested_urls = list(dict.fromkeys(URL_RE.findall(task)))
         spans.append(self._span("planner", "classify", started, "complete", "task received", "direct URLs or search"))
         source_candidates: list[Source] = []
+        reuse_hits = 0
         for url in requested_urls[:5 if mode == "dive" else 3]:
             fetch_started = time.time()
-            source = self._source_from_url(url)
+            cached = self.memory.reusable_snapshot(url, org_id, self._reuse_window(task))
+            reuse_hits += int(cached is not None)
+            source = self._source_from_snapshot(cached) if cached else self._source_from_url(url, org_id)
             spans.append(
                 self._span(
                     "extractor",
-                    "fetch_and_parse",
+                    "reuse_snapshot" if cached else "fetch_and_parse",
                     fetch_started,
-                    "complete" if source else "degraded",
+                    "reused" if cached and source else "complete" if source else "degraded",
                     url,
-                    "source accepted" if source else "source unavailable or blocked",
+                    "fresh snapshot reused" if cached and source else "source accepted" if source else "source unavailable or blocked",
                 )
             )
             if source:
@@ -210,6 +256,8 @@ class AgentWebEngine:
                         title=item.get("title", ""),
                         snippet=item.get("snippet", ""),
                         trust_score=self._trust_score(item["url"], item.get("title", "")),
+                        published_at=item.get("published_at"),
+                        content_type=item.get("content_type"),
                     )
                 )
 
@@ -229,6 +277,8 @@ class AgentWebEngine:
         )
         self.traces.save(execution_id, spans, org_id=org_id)
         self.memory.record_usage(org_id, mode)
+        self.metrics.gauge("memory_reuse_rate", reuse_hits / max(1, len(requested_urls)), {"org_id": org_id})
+        self.metrics.observe("cost_per_run", {"flash": 0.01, "focus": 0.05, "dive": 0.20}[mode], {"mode": mode, "org_id": org_id})
         return SolveResponse(
             execution_id=execution_id,
             mode=mode,
@@ -251,6 +301,9 @@ class AgentWebEngine:
         target_url = next(iter(URL_RE.findall(task)), None)
         if webhook_url:
             validate_url(webhook_url)
+            webhook_decision = self.trust_engine.should_fetch(webhook_url)
+            if not webhook_decision.allowed:
+                raise ValueError(webhook_decision.reason or "webhook URL rejected by trust engine")
         monitor = Monitor(
             id="mon_" + uuid.uuid4().hex[:16],
             task=task,
@@ -264,8 +317,31 @@ class AgentWebEngine:
         return monitor
 
     def _deliver_webhook(self, delivery: dict) -> object:
+        destination = delivery["url"]
+        decision = self.trust_engine.should_fetch(destination)
+        if not decision.allowed:
+            return DeliveryResult(False, 0, error=decision.reason or "webhook URL rejected by trust engine")
         secret = self.secret_provider.get("WEBHOOK_SIGNING_KEY", required=False) or self.secret_provider.get("AGENTWEB_WEBHOOK_SIGNING_KEY", required=False) or ""
-        return send_webhook(delivery["url"], delivery["payload"], secret, max_attempts=1)
+        return send_webhook(destination, delivery["payload"], secret, max_attempts=1)
+
+    @staticmethod
+    def _meaningful_change(task: str, previous: str | None, current: str) -> tuple[bool, str]:
+        if previous is None:
+            return False, "initial_snapshot"
+        lowered = task.lower()
+        if any(term in lowered for term in ("price", "cost", "sale")):
+            pattern = r"(?:₹|\$|€|£)\s?\d[\d,]*(?:\.\d+)?"
+            before = re.findall(pattern, previous)
+            after = re.findall(pattern, current)
+            if before or after:
+                return before != after, "price"
+        if any(term in lowered for term in ("availability", "available", "stock", "sold out")):
+            pattern = r"\b(?:in stock|out of stock|available|unavailable|sold out)\b"
+            before = [item.lower() for item in re.findall(pattern, previous, re.IGNORECASE)]
+            after = [item.lower() for item in re.findall(pattern, current, re.IGNORECASE)]
+            if before or after:
+                return before != after, "availability"
+        return previous != current, "full_content"
 
     def check_monitor(self, monitor: Monitor) -> Monitor:
         if monitor.status != "active":
@@ -287,10 +363,10 @@ class AgentWebEngine:
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
             self.memory.record_usage(monitor.org_id, "monitor_checks")
             return monitor
-        result = fetch_url(monitor.target_url)
+        result = fetch_url(monitor.target_url, trust_engine=self.trust_engine)
         if result.error:
             monitor.last_event = "check_failed"
-            monitor.last_error = result.error
+            monitor.last_error = redact_text(result.error)
             self.memory.update_monitor(monitor)
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
             self.memory.record_usage(monitor.org_id, "monitor_checks")
@@ -298,13 +374,14 @@ class AgentWebEngine:
         monitor.last_error = None
         content = html_to_text(result.body)
         previous = self.memory.get_latest(monitor.target_url, monitor.org_id)
-        changed = self.memory.save_snapshot(
+        snapshot_changed = self.memory.save_snapshot(
             key=monitor.target_url,
             url=monitor.target_url,
             content=content,
             captured_at=now,
             org_id=monitor.org_id,
         )
+        changed, change_policy = self._meaningful_change(monitor.task, previous["content"] if previous else None, content)
         monitor.last_event = "change_detected" if changed else "no_change"
         if changed:
             monitor.last_change_at = now
@@ -332,6 +409,6 @@ class AgentWebEngine:
                     monitor.last_delivery_attempts = 0
                     monitor.last_delivery_error = None
         self.memory.update_monitor(monitor)
-        self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_event)], org_id=monitor.org_id)
+        self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, f"{monitor.last_event}; policy={change_policy}; snapshot_changed={snapshot_changed}")], org_id=monitor.org_id)
         self.memory.record_usage(monitor.org_id, "monitor_checks")
         return monitor

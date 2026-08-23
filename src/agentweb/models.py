@@ -11,6 +11,14 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _omit_none(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _omit_none(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_omit_none(item) for item in value]
+    return value
+
+
 @dataclass
 class Source:
     id: str
@@ -19,6 +27,9 @@ class Source:
     snippet: str = ""
     trust_score: float = 0.0
     cited: bool = True
+    published_at: str | None = None
+    content_type: str | None = None
+    extraction_confidence: float | None = None
 
 
 @dataclass
@@ -42,7 +53,7 @@ class SolveResponse:
     structured_output: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _omit_none(asdict(self))
 
 
 @dataclass
@@ -64,4 +75,4 @@ class Monitor:
     org_id: str = "development"
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _omit_none(asdict(self))

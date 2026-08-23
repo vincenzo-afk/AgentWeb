@@ -8,6 +8,9 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
+
+from .redaction import redact_text
 
 
 @dataclass
@@ -52,12 +55,39 @@ class TraceStore:
         return "exec_" + uuid.uuid4().hex[:16]
 
     def save(self, execution_id: str, spans: list[Span], status: str = "complete", org_id: str = "development") -> None:
-        payload = json.dumps([asdict(span) for span in spans], separators=(",", ":"))
+        sanitized = []
+        for span in spans:
+            item = asdict(span)
+            for key, value in item.items():
+                if isinstance(value, str):
+                    item[key] = redact_text(value)
+            sanitized.append(item)
+        payload = json.dumps(sanitized, separators=(",", ":"))
         with sqlite3.connect(self.path) as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO execution_traces(execution_id, org_id, created_at, status, spans) VALUES (?, ?, ?, ?, ?)",
                 (execution_id, org_id, time.time(), status, payload),
             )
+
+    def delete(self, org_id: str, execution_id: str | None = None) -> int:
+        query = "DELETE FROM execution_traces WHERE org_id=?"
+        params: list[Any] = [org_id]
+        if execution_id is not None:
+            query += " AND execution_id=?"
+            params.append(execution_id)
+        with sqlite3.connect(self.path) as connection:
+            return int(connection.execute(query, tuple(params)).rowcount)
+
+    def purge_expired(self, retention_seconds: int = 30 * 86_400, now: float | None = None, org_id: str | None = None) -> int:
+        current = time.time() if now is None else now
+        cutoff = current - max(0, int(retention_seconds))
+        query = "DELETE FROM execution_traces WHERE created_at < ?"
+        params: list[Any] = [cutoff]
+        if org_id is not None:
+            query += " AND org_id=?"
+            params.append(org_id)
+        with sqlite3.connect(self.path) as connection:
+            return int(connection.execute(query, tuple(params)).rowcount)
 
     def get(self, execution_id: str, org_id: str = "development") -> dict | None:
         with sqlite3.connect(self.path) as connection:

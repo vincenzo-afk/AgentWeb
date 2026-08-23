@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 
 from .errors import BrowserActionError, BrowserTimeoutError, BrowserUnavailableError, InvalidRequestError
 from .fetch import validate_url
+from .models import _omit_none
+from .redaction import redact_text, redact_url
 from .trust_engine import TrustEngine
 
 
@@ -28,7 +30,7 @@ class BrowserSession:
     error: str | None = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return _omit_none(asdict(self))
 
 
 class BrowserEngine:
@@ -61,7 +63,9 @@ class BrowserEngine:
     def open(self, url: str, actions: list[dict] | None = None) -> BrowserSession:
         """Render a URL and run documented actions, returning partial results on action failure."""
         validate_url(url)
-        decision = self.trust_engine.should_fetch(url)
+        requested_url = url
+        safe_url = redact_url(url)
+        decision = self.trust_engine.should_fetch(requested_url)
         if not decision.allowed:
             raise BrowserActionError(decision.reason or "URL rejected by trust engine")
         try:
@@ -81,8 +85,8 @@ class BrowserEngine:
         if any(isinstance(action, dict) and "credentials" in action for action in requested_actions):
             raise InvalidRequestError("credentials are not accepted in browser actions")
         started = time.monotonic()
-        session = BrowserSession(session_id="sess_" + uuid.uuid4().hex[:16], url=url, status="complete")
-        origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+        session = BrowserSession(session_id="sess_" + uuid.uuid4().hex[:16], url=safe_url, status="complete")
+        origin = f"{urlparse(requested_url).scheme}://{urlparse(requested_url).netloc}"
 
         def allow_request(request) -> bool:
             if self.allow_cross_origin:
@@ -117,8 +121,8 @@ class BrowserEngine:
                 context.route("**/*", lambda route: route.continue_() if allow_request(route.request) else route.abort())
                 page = context.new_page()
                 page.set_default_timeout(int(self.action_timeout * 1000))
-                page.goto(url, wait_until="domcontentloaded", timeout=int(self.action_timeout * 1000))
-                session.url = page.url
+                page.goto(requested_url, wait_until="domcontentloaded", timeout=int(self.action_timeout * 1000))
+                session.url = redact_url(page.url)
                 for index, action in enumerate(requested_actions):
                     if time.monotonic() - started > self.session_timeout:
                         raise BrowserTimeoutError("browser session exceeded the 90-second timeout")
@@ -139,7 +143,7 @@ class BrowserEngine:
                             last_error = error
                     if last_error is not None:
                         session.status = "partial"
-                        session.error = f"action {index} ({action_type}) failed after retry: {last_error}"
+                        session.error = redact_text(f"action {index} ({action_type}) failed after retry: {last_error}")
                         session.warnings.append(session.error)
                         break
                 session.title = page.title()
@@ -152,12 +156,12 @@ class BrowserEngine:
                 session.extracted = list(self._extracted_for_page(page))
             except PlaywrightTimeoutError as error:
                 session.status = "partial"
-                session.error = f"browser timeout: {error}"
+                session.error = redact_text(f"browser timeout: {error}")
                 session.warnings.append(session.error)
             except BrowserTimeoutError:
                 raise
             except Exception as error:
-                raise BrowserActionError(str(error)) from error
+                raise BrowserActionError(redact_text(str(error))) from error
             finally:
                 if context is not None:
                     context.close()

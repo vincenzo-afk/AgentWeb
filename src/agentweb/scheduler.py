@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .auth import RateLimiter
+from .errors import RateLimitError
 from .memory import MemoryStore
 from .models import Monitor
 
@@ -31,6 +32,11 @@ class Scheduler:
         self.poll_seconds = poll_seconds
         self.scheduled_limiter = RateLimiter(capacity=100.0, refill_per_second=100.0 / 3600.0)
         self.webhook_limiter = RateLimiter(capacity=20.0, refill_per_second=20.0 / 60.0)
+
+    @staticmethod
+    def _webhook_retry_delay(attempt: int) -> float:
+        # Five total attempts remain bounded within a 24-hour delivery window.
+        return (300.0, 1_800.0, 7_200.0, 43_200.0)[max(0, min(attempt - 1, 3))]
 
     def _run_webhook(self, job: dict[str, Any], current: float, org_id: str) -> dict[str, Any]:
         delivery = self.store.get_webhook_delivery(job["id"], org_id)
@@ -60,12 +66,30 @@ class Scheduler:
             exhausted = attempt >= int(delivery["max_attempts"])
             delivery_status = "dead_letter" if exhausted else "retrying"
             self.store.mark_webhook_delivery(job["id"], org_id, delivery_status, error or "webhook delivery failed", current)
-            job_status = self.store.fail_job(job["id"], error or "webhook delivery failed", current, org_id)
+            job_status = self.store.fail_job(
+                job["id"], error or "webhook delivery failed", current, org_id,
+                retry_delay=None if exhausted else self._webhook_retry_delay(attempt),
+            )
             return {"job_id": job["id"], "status": job_status, "attempt": attempt, "error": error or "webhook delivery failed"}
+        except RateLimitError as error:
+            message = str(error)[:500]
+            exhausted = int(job.get("attempts", 1)) >= int(job.get("max_attempts", 5))
+            delivery_status = "dead_letter" if exhausted else "rate_limited"
+            self.store.mark_webhook_delivery(job["id"], org_id, delivery_status, message, current)
+            job_status = self.store.fail_job(
+                job["id"], message, current, org_id,
+                retry_delay=None if exhausted else self._webhook_retry_delay(int(job.get("attempts", 1))),
+            )
+            return {"job_id": job["id"], "status": job_status, "error": message}
         except Exception as error:  # noqa: BLE001 - job boundary preserves the queue
             message = str(error)[:500]
-            self.store.mark_webhook_delivery(job["id"], org_id, "rate_limited" if error.__class__.__name__ == "RateLimitError" else "retrying", message, current)
-            job_status = self.store.fail_job(job["id"], message, current, org_id)
+            attempts = int(job.get("attempts", 1))
+            exhausted = attempts >= int(job.get("max_attempts", 5))
+            self.store.mark_webhook_delivery(job["id"], org_id, "dead_letter" if exhausted else "retrying", message, current)
+            job_status = self.store.fail_job(
+                job["id"], message, current, org_id,
+                retry_delay=None if exhausted else self._webhook_retry_delay(attempts),
+            )
             return {"job_id": job["id"], "status": job_status, "error": message}
 
     def run_once(self, now: float | None = None) -> dict[str, Any] | None:

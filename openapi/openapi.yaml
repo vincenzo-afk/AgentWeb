@@ -324,6 +324,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UsageSummary'
+  /admin/metrics:
+    get:
+      summary: Read organization-scoped operational metrics
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Organization-filtered counters, observations, and gauges
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [counters, observations, gauges, captured_at]
+                properties:
+                  counters:
+                    type: object
+                  observations:
+                    type: object
+                  gauges:
+                    type: object
+                  captured_at:
+                    type: number
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/data:
+    delete:
+      summary: Delete organization-owned snapshots and execution traces
+      operationId: deleteOrganizationData
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum: [snapshots, traces, all]
+                  default: snapshots
+                target:
+                  type: string
+                execution_id:
+                  type: string
+      responses:
+        '200':
+          description: Deletion counts for the authenticated organization
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [org_id, kind, deleted_snapshots, deleted_traces]
+                properties:
+                  org_id:
+                    type: string
+                  kind:
+                    type: string
+                  deleted_snapshots:
+                    type: integer
+                  deleted_traces:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /extract:
     post:
       summary: Structured extraction from a page
@@ -420,7 +489,7 @@ components:
           type: number
     ExtractResponse:
       type: object
-      required: [url, status, text, field_confidence, confidence]
+      required: [url, status, text, links, tables, entities, source_spans, field_confidence, confidence, confidence_reasons]
       properties:
         url:
           type: string
@@ -436,6 +505,36 @@ components:
           type: array
           items:
             type: string
+        tables:
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: string
+        entities:
+          type: array
+          items:
+            type: string
+        source_spans:
+          type: array
+          items:
+            type: object
+            required: [field, source, span, value]
+            properties:
+              field:
+                type: string
+              source:
+                type: string
+              span:
+                type: array
+                minItems: 2
+                maxItems: 2
+                items:
+                  type: integer
+              value:
+                type: string
         parse_warnings:
           type: array
           items:
@@ -513,6 +612,7 @@ components:
                 type: integer
     BrowserSession:
       type: object
+      required: [session_id, url, status, actions, extracted, title, text, html, warnings]
       properties:
         session_id:
           type: string
@@ -539,8 +639,9 @@ components:
           type: array
           items:
             type: string
-        last_error:
+        error:
           type: string
+          nullable: true
     SolveRequest:
       type: object
       required: [task]
@@ -563,6 +664,7 @@ components:
           default: text
     Source:
       type: object
+      required: [id, url, title, snippet, trust_score, cited]
       properties:
         id:
           type: string
@@ -576,8 +678,21 @@ components:
           type: number
         cited:
           type: boolean
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        content_type:
+          type: string
+          nullable: true
+        extraction_confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          nullable: true
     Citation:
       type: object
+      required: [claim_span, source_ids]
       properties:
         claim_span:
           type: array
@@ -589,6 +704,7 @@ components:
             type: string
     SolveResponse:
       type: object
+      required: [execution_id, mode, answer, sources, citations, created_at, insufficient_evidence, output_format, evidence_score, conflicts, structured_output]
       properties:
         execution_id:
           type: string
@@ -639,6 +755,7 @@ components:
           maxLength: 128
     Monitor:
       type: object
+      required: [id, org_id, task, status, frequency, last_delivery_attempts]
       properties:
         id:
           type: string
@@ -652,16 +769,26 @@ components:
         status:
           type: string
           enum: [active, paused, cancelled]
+        target_url:
+          type: string
+          nullable: true
+        webhook_url:
+          type: string
+          nullable: true
         last_checked_at:
           type: string
           format: date-time
+          nullable: true
         last_change_at:
           type: string
           format: date-time
+          nullable: true
         last_delivery_id:
           type: string
+          nullable: true
         last_delivery_status:
           type: string
+          nullable: true
           enum: [pending, retrying, rate_limited, delivered, dead_letter, blocked]
         last_delivery_attempts:
           type: integer
@@ -669,6 +796,7 @@ components:
           maximum: 5
         last_delivery_error:
           type: string
+          nullable: true
     WebhookDelivery:
       type: object
       properties:

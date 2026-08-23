@@ -8,6 +8,7 @@ import sys
 
 from .api import create_server
 from .engine import AgentWebEngine
+from .maintenance import purge_retention
 from .memory import MemoryStore
 
 
@@ -36,9 +37,24 @@ def _migration_main(argv: list[str]) -> None:
         store.close()
 
 
+def _gc_main(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="agentweb gc")
+    parser.add_argument("--data", default="agentweb.sqlite3", help="SQLite database path.")
+    parser.add_argument("--snapshot-days", type=int, default=90, help="Snapshot retention window.")
+    parser.add_argument("--trace-days", type=int, default=30, help="Trace retention window.")
+    parser.add_argument("--org", default=None, help="Limit cleanup to one organization.")
+    args = parser.parse_args(argv[1:])
+    memory = MemoryStore(args.data)
+    engine = AgentWebEngine(memory)
+    print(json.dumps(purge_retention(memory, engine.traces, snapshot_retention_days=args.snapshot_days, trace_retention_days=args.trace_days, org_id=args.org), indent=2))
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] in {"migrate-export", "migrate-import"}:
         _migration_main(sys.argv[1:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "gc":
+        _gc_main(sys.argv[1:])
         return
     parser = argparse.ArgumentParser(description="Run the AgentWeb local API server.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1).")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import urllib.robotparser
+from urllib.error import HTTPError
 from collections import deque
 from dataclasses import asdict, dataclass
 from urllib.parse import urldefrag, urljoin, urlparse
@@ -40,7 +41,7 @@ class Crawler:
     def __init__(self, trust_engine: TrustEngine | None = None, user_agent: str = "AgentWeb/0.2") -> None:
         self.trust_engine = trust_engine or TrustEngine()
         self.user_agent = user_agent
-        self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._robots: dict[str, urllib.robotparser.RobotFileParser | bool] = {}
 
     def _allowed_by_robots(self, url: str) -> bool:
         parsed = urlparse(url)
@@ -50,10 +51,14 @@ class Crawler:
             try:
                 parser.read()
                 self._robots[origin] = parser
+            except HTTPError as error:
+                # A missing robots file is equivalent to no published policy;
+                # other HTTP failures fail closed to avoid bypassing policy.
+                self._robots[origin] = error.code == 404
             except Exception:
-                self._robots[origin] = None
+                self._robots[origin] = False
         parser = self._robots[origin]
-        return parser is None or parser.can_fetch(self.user_agent, url)
+        return parser if isinstance(parser, bool) else parser.can_fetch(self.user_agent, url)
 
     def crawl(
         self,
@@ -83,7 +88,7 @@ class Crawler:
             if not self._allowed_by_robots(url):
                 pages.append(CrawledPage(url, 0, False, current_depth, "blocked by robots.txt"))
                 continue
-            result = fetch_url(url)
+            result = fetch_url(url, trust_engine=self.trust_engine)
             if result.error:
                 pages.append(CrawledPage(url, result.status, False, current_depth, result.error))
                 continue

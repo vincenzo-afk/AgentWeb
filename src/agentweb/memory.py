@@ -8,6 +8,7 @@ import json
 import sqlite3
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -264,6 +265,41 @@ class MemoryStore:
         self.snapshot(key, content, captured_at, org_id)
         return previous is not None and previous["content_hash"] != self.content_hash(content)
 
+    def reusable_snapshot(self, target: str, org_id: str = "development", max_age_seconds: int = 86_400, now: float | None = None) -> dict[str, str] | None:
+        """Return the latest snapshot only when reuse is enabled and within its freshness window."""
+        import os
+        if os.getenv("AGENTWEB_MEMORY_REUSE_ENABLED", "1").strip().lower() in {"0", "false", "off"}:
+            return None
+        latest = self.get_latest(target, org_id)
+        if not latest:
+            return None
+        try:
+            captured = datetime.fromisoformat(latest["captured_at"].replace("Z", "+00:00"))
+            age = (datetime.fromtimestamp(time.time() if now is None else now, tz=timezone.utc) - captured).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            return None
+        return latest if 0 <= age <= max(0, int(max_age_seconds)) else None
+
+    def delete_snapshots(self, org_id: str, target: str | None = None) -> int:
+        query = "DELETE FROM snapshots WHERE org_id=?"
+        params: list[Any] = [org_id]
+        if target is not None:
+            query += " AND target=?"
+            params.append(target)
+        with self._connect() as connection:
+            return int(connection.execute(query, tuple(params)).rowcount)
+
+    def purge_expired_snapshots(self, retention_seconds: int = 90 * 86_400, now: float | None = None, org_id: str | None = None) -> int:
+        current = time.time() if now is None else now
+        cutoff = datetime.fromtimestamp(current - max(0, int(retention_seconds)), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        query = "DELETE FROM snapshots WHERE captured_at < ?"
+        params: list[Any] = [cutoff]
+        if org_id is not None:
+            query += " AND org_id=?"
+            params.append(org_id)
+        with self._connect() as connection:
+            return int(connection.execute(query, tuple(params)).rowcount)
+
     def diff(self, target: str, from_hash: str, to_hash: str, org_id: str = "development") -> dict[str, Any]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -506,7 +542,7 @@ class MemoryStore:
         with self._connect() as connection:
             connection.execute(query, tuple(params))
 
-    def fail_job(self, job_id: str, error: str, now: float | None = None, org_id: str | None = None) -> str:
+    def fail_job(self, job_id: str, error: str, now: float | None = None, org_id: str | None = None, retry_delay: float | None = None) -> str:
         now = time.time() if now is None else now
         with self._connect() as connection:
             query = "SELECT attempts, max_attempts FROM scheduler_jobs WHERE id=?"
@@ -519,7 +555,8 @@ class MemoryStore:
                 return "missing"
             attempts = int(row["attempts"])
             status = "dead_letter" if attempts >= int(row["max_attempts"]) else "pending"
-            run_at = now if status == "dead_letter" else now + min(0.5 * (2 ** max(0, attempts - 1)), 30.0)
+            default_delay = min(0.5 * (2 ** max(0, attempts - 1)), 30.0)
+            run_at = now if status == "dead_letter" else now + (default_delay if retry_delay is None else max(0.0, float(retry_delay)))
             update = "UPDATE scheduler_jobs SET status=?, run_at=?, lease_until=NULL, last_error=?, updated_at=? WHERE id=?"
             update_params: list[Any] = [status, run_at, error[:500], now, job_id]
             if org_id is not None:

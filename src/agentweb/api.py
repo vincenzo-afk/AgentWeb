@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .auth import Authenticator, RateLimiter
 from .engine import AgentWebEngine
 from .errors import AgentWebError, ConflictError, InvalidRequestError, NotFoundError, PermissionError
+from .redaction import redact_url
 from .search import search
 from .secrets import build_provider
 
@@ -56,7 +58,7 @@ def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, b
 
 
 class AgentWebHandler(BaseHTTPRequestHandler):
-    server_version = "AgentWeb/0.8.0"
+    server_version = "AgentWeb/0.9.0"
 
     @property
     def engine(self) -> AgentWebEngine:
@@ -71,11 +73,25 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         return self.server.rate_limiter  # type: ignore[attr-defined]
 
     @property
+    def metrics(self):
+        return self.server.engine.metrics  # type: ignore[attr-defined]
+
+    def handle_one_request(self) -> None:  # noqa: N802
+        started = time.monotonic()
+        try:
+            super().handle_one_request()
+        finally:
+            endpoint = urlparse(getattr(self, "path", "/unknown")).path
+            org_id = getattr(getattr(self, "_principal", None), "org_id", None)
+            self.metrics.record_request(endpoint, time.monotonic() - started, int(getattr(self, "_last_response_status", 500)), org_id, getattr(self, "_last_error_type", None))
+
+    @property
     def principal(self):
         return getattr(self, "_principal", None)
 
     def _send_json(self, status: int, payload: dict | list | None = None, request_id: str | None = None) -> None:
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._last_response_status = int(status)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -92,6 +108,15 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        rate_info = getattr(self, "_rate_limit_info", None)
+        if rate_info:
+            self.send_header("X-RateLimit-Limit", str(int(rate_info["limit"])))
+            self.send_header("X-RateLimit-Remaining", str(int(float(rate_info["remaining"]))))
+            self.send_header("X-RateLimit-Reset", str(int(rate_info["reset"])))
+        if status == HTTPStatus.TOO_MANY_REQUESTS:
+            retry_after = getattr(getattr(self, "_rate_limit_error", None), "retry_after", None)
+            if retry_after is not None:
+                self.send_header("Retry-After", str(int(retry_after)))
         if request_id:
             self.send_header("X-Request-ID", request_id)
         self.end_headers()
@@ -99,6 +124,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _error(self, error: AgentWebError, request_id: str) -> None:
+        self._last_error_type = error.error_type
         error.request_id = request_id
         self._send_json(error.status_code, error.as_dict(), request_id)
 
@@ -108,10 +134,14 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             if scope == "admin:*" and not principal.authenticated:
                 raise PermissionError("admin endpoints require an authenticated organization key")
             weight = 2.0 if scope == "solve:execute" else 1.0
-            self.rate_limiter.check(f"{principal.org_id}:{principal.key_id}", weight)
+            self._rate_limit_info = self.rate_limiter.check(f"{principal.org_id}:{principal.key_id}", weight)
             self._principal = principal
             return principal
         except AgentWebError as error:
+            if error.status_code == HTTPStatus.TOO_MANY_REQUESTS:
+                self._rate_limit_error = error
+                retry_after = getattr(error, "retry_after", 60) or 60
+                self._rate_limit_info = {"limit": self.rate_limiter.capacity, "remaining": 0, "reset": int(time.time()) + int(retry_after)}
             self._error(error, request_id)
             return None
 
@@ -236,6 +266,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 events, next_cursor, has_more = _page(self.authenticator.key_store.list_audit(principal.org_id), query)
                 self._send_json(HTTPStatus.OK, {"events": events, "data": events, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
+            if path == "/admin/metrics":
+                self._send_json(HTTPStatus.OK, self.metrics.snapshot(principal.org_id), request_id)
+                return
             if path == "/admin/usage":
                 period = query.get("period", [None])[0]
                 if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
@@ -249,17 +282,35 @@ class AgentWebHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
         path = urlparse(self.path).path
-        scope = "admin:*" if path.startswith("/admin/keys/") else "observe:manage"
+        scope = "admin:*" if path.startswith(("/admin/keys/", "/admin/data")) else "observe:manage"
         principal = self._authenticate(scope, request_id)
         if principal is None:
             return
         idempotency_key = None
         request_hash = None
         try:
-            if path.startswith(("/admin/keys/", "/observe/")):
-                idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(), {})
+            payload = self._read_json() if path == "/admin/data" else {}
+            if path.startswith(("/admin/keys/", "/observe/")) or path == "/admin/data":
+                idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
+            if path == "/admin/data":
+                kind = payload.get("kind", "snapshots")
+                if kind not in {"snapshots", "traces", "all"}:
+                    raise InvalidRequestError("kind must be snapshots, traces, or all")
+                target = payload.get("target")
+                if target is not None and (not isinstance(target, str) or not target.strip()):
+                    raise InvalidRequestError("target must be a non-empty string when provided")
+                execution_id = payload.get("execution_id")
+                if execution_id is not None and (not isinstance(execution_id, str) or not execution_id.strip()):
+                    raise InvalidRequestError("execution_id must be a non-empty string when provided")
+                deleted_snapshots = self.engine.memory.delete_snapshots(principal.org_id, redact_url(target) if target and target.startswith(("http://", "https://")) else target) if kind in {"snapshots", "all"} else 0
+                deleted_traces = self.engine.traces.delete(principal.org_id, execution_id) if kind in {"traces", "all"} else 0
+                self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces})
+                response_payload = {"org_id": principal.org_id, "kind": kind, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces}
+                self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.OK), response_payload)
+                self._send_json(HTTPStatus.OK, response_payload, request_id)
+                return
             if path.startswith("/admin/keys/"):
                 key_id = path.rsplit("/", 1)[-1]
                 if not self.authenticator.revoke_key(principal.org_id, key_id, principal.key_id):
@@ -278,6 +329,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         except AgentWebError as error:
             self._release_idempotency(principal, idempotency_key, request_hash)
             self._error(error, request_id)
+        except Exception:
+            self._release_idempotency(principal, idempotency_key, request_hash)
+            self._error(AgentWebError("internal server error", request_id=request_id), request_id)
 
     def do_POST(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
@@ -344,10 +398,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             self._release_idempotency(principal, idempotency_key, request_hash)
             from .errors import UpstreamError
             self._error(UpstreamError(str(error)), request_id)
-        except Exception as error:  # defensive API boundary; details stay local
+        except Exception:  # defensive API boundary; details stay local
             self._release_idempotency(principal, idempotency_key, request_hash)
-            from .errors import AgentWebError as InternalError
-            self._error(InternalError(str(error)), request_id)
+            self._error(AgentWebError("internal server error", request_id=request_id), request_id)
 
     def log_message(self, format: str, *args: object) -> None:
         if os.getenv("AGENTWEB_QUIET") != "1":
