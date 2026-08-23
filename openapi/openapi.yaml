@@ -446,6 +446,10 @@ components:
             type: number
             minimum: 0
             maximum: 1
+        confidence_reasons:
+          type: array
+          items:
+            type: string
         confidence:
           type: number
           minimum: 0

@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import threading
+from unittest.mock import patch
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,7 +22,7 @@ from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
 from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError
-from agentweb.search import SearchProviderConfig, search
+from agentweb.search import JsonSearchProvider, SearchProviderConfig, search
 from agentweb.synthesis import synthesize
 from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
 from agentweb.normalizer import normalize
@@ -113,6 +114,33 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(results[0]["url"], "https://example.com/result")
         self.assertEqual(calls, [("agentweb", 3, "week")])
 
+    def test_json_search_provider_normalizes_aliases_and_auth_header(self):
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps({"results": [{"url": "https://example.com", "description": "A result", "date": "2026-08-24"}]}).encode()
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["authorization"] = request.get_header("Authorization")
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        with patch("agentweb.search.urlopen", fake_urlopen):
+            results = JsonSearchProvider("https://search.example.test/query", "test-secret", 7.0).search("agentweb", 2, "week")
+        self.assertEqual(results[0]["snippet"], "A result")
+        self.assertEqual(results[0]["published_at"], "2026-08-24")
+        self.assertIn("freshness=week", captured["url"])
+        self.assertEqual(captured["authorization"], "Bearer test-secret")
+        self.assertEqual(captured["timeout"], 7.0)
+
     def test_search_provider_configuration_requires_endpoint_for_json_provider(self):
         os.environ["AGENTWEB_SEARCH_PROVIDER"] = "json"
         os.environ.pop("AGENTWEB_SEARCH_ENDPOINT", None)
@@ -158,6 +186,7 @@ class AgentWebTests(unittest.TestCase):
         self.assertGreater(data["trust_score"], 0)
         self.assertEqual(data["field_confidence"]["title"], 0.95)
         self.assertGreater(data["confidence"], 0.5)
+        self.assertIn("main text extracted", data["confidence_reasons"])
 
     def test_schema_guided_extract_returns_normalized_field(self):
         data = self.engine.extract(self.url, {"title": "string"})

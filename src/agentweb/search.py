@@ -149,8 +149,9 @@ class JsonSearchProvider:
                 "title": str(item.get("title", "")),
                 "snippet": str(item.get("snippet", item.get("description", ""))),
             }
-            if item.get("published_at"):
-                result["published_at"] = str(item["published_at"])
+            published_at = item.get("published_at", item.get("published_date", item.get("date")))
+            if published_at:
+                result["published_at"] = str(published_at)
             results.append(result)
         return results
 

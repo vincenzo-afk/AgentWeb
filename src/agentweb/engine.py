@@ -135,8 +135,10 @@ class AgentWebEngine:
         description = extract_metadata(result.body)[1]
         text = parsed.text or html_to_text(result.body)
         base_confidence = 0.85 if text else 0.20
+        confidence_reasons = ["main text extracted" if text else "main text is empty"]
         if parsed.parse_warnings:
             base_confidence = max(0.20, base_confidence - 0.20 * len(parsed.parse_warnings))
+            confidence_reasons.append(f"{len(parsed.parse_warnings)} parse warning(s)")
         field_confidence = {
             "title": 0.95 if title else 0.20,
             "description": 0.85 if description else 0.20,
@@ -153,6 +155,7 @@ class AgentWebEngine:
             "parse_warnings": parsed.parse_warnings,
             "field_confidence": field_confidence,
             "confidence": round(sum(field_confidence.values()) / len(field_confidence), 2),
+            "confidence_reasons": confidence_reasons,
             "trust_score": self._trust_score(result.url, title),
         }
         if requested_schema:
