@@ -10,7 +10,7 @@
 
 ## Organizational isolation
 
-Snapshot, execution-trace, and task data are scoped to the owning organization. Graph intelligence derived from public web content may be shared in aggregate (e.g., "this entity is a known competitor of that entity") without exposing which organization's task triggered the discovery, but organizations can opt out of contributing to shared graph intelligence — see your account settings.
+Snapshot, execution-trace, task, monitor-job, API-key, and audit-event data are scoped to the owning organization. Ownership is checked on every read, update, delete, trace lookup, and scheduled-job claim; a valid key from another organization receives a not-found result rather than a record-disclosure signal. Graph intelligence derived from public web content may be shared in aggregate (e.g., "this entity is a known competitor of that entity") without exposing which organization's task triggered the discovery, but organizations can opt out of contributing to shared graph intelligence — see your account settings.
 
 ## Third-party content caveats
 

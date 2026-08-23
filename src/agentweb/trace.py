@@ -1,4 +1,4 @@
-"""Append-only, secret-safe execution trace records."""
+"""Append-only, tenant-scoped, secret-safe execution trace records."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
@@ -26,39 +26,51 @@ class TraceStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(execution_traces)")}
+            if columns and "org_id" not in columns:
+                connection.execute("ALTER TABLE execution_traces RENAME TO execution_traces_legacy")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS execution_traces (
                     execution_id TEXT PRIMARY KEY,
+                    org_id TEXT NOT NULL DEFAULT 'legacy',
                     created_at REAL NOT NULL,
                     status TEXT NOT NULL,
                     spans TEXT NOT NULL
                 )
                 """
             )
+            if columns and "org_id" not in columns:
+                connection.execute(
+                    "INSERT OR IGNORE INTO execution_traces(execution_id, org_id, created_at, status, spans) "
+                    "SELECT execution_id, 'legacy', created_at, status, spans FROM execution_traces_legacy"
+                )
+                connection.execute("DROP TABLE execution_traces_legacy")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_traces_org_time ON execution_traces(org_id, created_at)")
 
     def start(self) -> str:
         return "exec_" + uuid.uuid4().hex[:16]
 
-    def save(self, execution_id: str, spans: list[Span], status: str = "complete") -> None:
+    def save(self, execution_id: str, spans: list[Span], status: str = "complete", org_id: str = "development") -> None:
         payload = json.dumps([asdict(span) for span in spans], separators=(",", ":"))
         with sqlite3.connect(self.path) as connection:
             connection.execute(
-                "INSERT OR REPLACE INTO execution_traces(execution_id, created_at, status, spans) VALUES (?, ?, ?, ?)",
-                (execution_id, time.time(), status, payload),
+                "INSERT OR REPLACE INTO execution_traces(execution_id, org_id, created_at, status, spans) VALUES (?, ?, ?, ?, ?)",
+                (execution_id, org_id, time.time(), status, payload),
             )
 
-    def get(self, execution_id: str) -> dict | None:
+    def get(self, execution_id: str, org_id: str = "development") -> dict | None:
         with sqlite3.connect(self.path) as connection:
             row = connection.execute(
-                "SELECT execution_id, created_at, status, spans FROM execution_traces WHERE execution_id = ?",
-                (execution_id,),
+                "SELECT execution_id, org_id, created_at, status, spans FROM execution_traces WHERE execution_id = ? AND org_id = ?",
+                (execution_id, org_id),
             ).fetchone()
         if not row:
             return None
         return {
             "execution_id": row[0],
-            "created_at": row[1],
-            "status": row[2],
-            "spans": json.loads(row[3]),
+            "org_id": row[1],
+            "created_at": row[2],
+            "status": row[3],
+            "spans": json.loads(row[4]),
         }

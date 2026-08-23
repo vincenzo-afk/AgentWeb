@@ -89,7 +89,7 @@ class AgentWebEngine:
             trust_score=self._trust_score(result.url, title),
         )
 
-    def browser_open(self, url: str, actions: list[dict] | None = None):
+    def browser_open(self, url: str, actions: list[dict] | None = None, org_id: str = "development"):
         """Render a page through the isolated browser adapter and persist a trace."""
         started = time.time()
         execution_id = "exec_" + uuid.uuid4().hex[:16]
@@ -98,15 +98,19 @@ class AgentWebEngine:
             self.traces.save(
                 execution_id,
                 [self._span("browser", "open", started, session.status, url, f"{len(session.actions)} action(s)")],
-                status=session.status,
-            )
+                                    status=session.status,
+                    org_id=org_id,
+                )
+
             return session
         except Exception as error:
             self.traces.save(
                 execution_id,
                 [self._span("browser", "open", started, "failed", url, str(error))],
-                status="failed",
-            )
+                                    status="failed",
+                    org_id=org_id,
+                )
+
             raise
 
     def extract(self, url: str, requested_schema: dict | None = None) -> dict:
@@ -139,7 +143,7 @@ class AgentWebEngine:
             data["data"] = structured
         return data
 
-    def solve(self, task: str, mode: str = "focus") -> SolveResponse:
+    def solve(self, task: str, mode: str = "focus", org_id: str = "development") -> SolveResponse:
         task = task.strip()
         if not task or len(task) > 2000:
             raise ValueError("task must contain between 1 and 2000 characters")
@@ -205,7 +209,7 @@ class AgentWebEngine:
             citations = []
             insufficient = True
         spans.append(self._span("synthesis", "synthesize", time.time(), "complete", task, f"{len(citations)} citation(s)"))
-        self.traces.save(execution_id, spans)
+        self.traces.save(execution_id, spans, org_id=org_id)
         return SolveResponse(
             execution_id=execution_id,
             mode=mode,
@@ -215,7 +219,7 @@ class AgentWebEngine:
             insufficient_evidence=insufficient,
         )
 
-    def create_monitor(self, task: str, frequency: str = "hourly", webhook_url: str | None = None) -> Monitor:
+    def create_monitor(self, task: str, frequency: str = "hourly", webhook_url: str | None = None, org_id: str = "development") -> Monitor:
         task = task.strip()
         if not task or len(task) > 2000:
             raise ValueError("task must contain between 1 and 2000 characters")
@@ -230,9 +234,10 @@ class AgentWebEngine:
             frequency=frequency,
             target_url=target_url,
             webhook_url=webhook_url,
+            org_id=org_id,
         )
         self.memory.create_monitor(monitor)
-        self.traces.save(monitor.id, [self._span("monitor", "create", time.time(), "complete", task, monitor.id)])
+        self.traces.save(monitor.id, [self._span("monitor", "create", time.time(), "complete", task, monitor.id)], org_id=org_id)
         return monitor
 
     def check_monitor(self, monitor: Monitor) -> Monitor:
@@ -244,27 +249,31 @@ class AgentWebEngine:
             monitor.last_event = "check_failed"
             monitor.last_error = "monitor task does not include a direct URL"
             self.memory.update_monitor(monitor)
+            self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.task, monitor.last_error)], org_id=monitor.org_id)
             return monitor
         decision = self.trust_engine.should_fetch(monitor.target_url)
         if not decision.allowed:
             monitor.last_event = "check_failed"
             monitor.last_error = decision.reason
             self.memory.update_monitor(monitor)
+            self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
             return monitor
         result = fetch_url(monitor.target_url)
         if result.error:
             monitor.last_event = "check_failed"
             monitor.last_error = result.error
             self.memory.update_monitor(monitor)
+            self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
             return monitor
         monitor.last_error = None
         content = html_to_text(result.body)
-        previous = self.memory.get_latest(monitor.target_url)
+        previous = self.memory.get_latest(monitor.target_url, monitor.org_id)
         changed = self.memory.save_snapshot(
             key=monitor.target_url,
             url=monitor.target_url,
             content=content,
             captured_at=now,
+            org_id=monitor.org_id,
         )
         monitor.last_event = "change_detected" if changed else "no_change"
         if changed:
@@ -281,12 +290,12 @@ class AgentWebEngine:
                         "diff": {
                             "target": monitor.target_url,
                             "from_hash": previous["content_hash"] if previous else None,
-                            "to_hash": self.memory.get_latest(monitor.target_url)["content_hash"],
+                            "to_hash": self.memory.get_latest(monitor.target_url, monitor.org_id)["content_hash"],
                         },
                     }
                     delivery = send_webhook(monitor.webhook_url, payload, secret)
                     if not delivery.delivered:
                         monitor.last_error = delivery.error or "webhook delivery failed"
         self.memory.update_monitor(monitor)
-        self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_event)])
+        self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_event)], org_id=monitor.org_id)
         return monitor

@@ -4,15 +4,19 @@ Organization, key, and usage management endpoints. Requires an admin-scoped API 
 
 ## `GET /admin/keys`
 
-Lists API keys for the organization, including scope and creation date (never returns full secret values after initial creation).
+Lists API keys for the authenticated organization, including scope, prefix, creation date, and revocation state. It never returns full secret values.
 
 ## `POST /admin/keys`
 
-Creates a new API key with optional scope restrictions (e.g., `search`, `extract`, no `browser`, no `admin`).
+Creates a new organization API key with scope restrictions such as `search:read` or `extract:read`. The plaintext `sk-live-...` secret is returned only in the creation response; SQLite stores a PBKDF2-derived hash and prefix instead.
 
 ## `DELETE /admin/keys/{id}`
 
-Revokes a key.
+Revokes a key only when it belongs to the authenticated organization. Revocation also clears the short-lived authorization cache.
+
+## `GET /admin/audit`
+
+Returns immutable organization-scoped security events such as `api_key.created` and `api_key.revoked`. Secrets are never included in event metadata.
 
 ## `GET /admin/usage`
 

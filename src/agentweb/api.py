@@ -1,4 +1,4 @@
-"""Dependency-free HTTP API for AgentWeb's Phase 0/1 MVP."""
+"""Dependency-free HTTP API with tenant-scoped authorization and storage access."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .auth import Authenticator, RateLimiter
 from .engine import AgentWebEngine
-from .errors import AgentWebError, InvalidRequestError, NotFoundError
+from .errors import AgentWebError, InvalidRequestError, NotFoundError, PermissionError
 from .search import search
 
 
 class AgentWebHandler(BaseHTTPRequestHandler):
-    server_version = "AgentWeb/0.2"
+    server_version = "AgentWeb/0.3"
 
     @property
     def engine(self) -> AgentWebEngine:
@@ -30,12 +30,26 @@ class AgentWebHandler(BaseHTTPRequestHandler):
     def rate_limiter(self) -> RateLimiter:
         return self.server.rate_limiter  # type: ignore[attr-defined]
 
+    @property
+    def principal(self):
+        return getattr(self, "_principal", None)
+
     def _send_json(self, status: int, payload: dict | list | None = None, request_id: str | None = None) -> None:
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        allowed_origins = {item.strip() for item in os.getenv("AGENTWEB_ALLOWED_ORIGINS", "").split(",") if item.strip()}
+        origin = self.headers.get("Origin")
+        if allowed_origins:
+            if origin in allowed_origins:
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+        elif not self.authenticator.key_store.has_active_keys() and not self.authenticator._keys:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         if request_id:
@@ -51,7 +65,11 @@ class AgentWebHandler(BaseHTTPRequestHandler):
     def _authenticate(self, scope: str, request_id: str):
         try:
             principal = self.authenticator.authenticate(self.headers.get("Authorization"), scope)
-            self.rate_limiter.check(principal.key_id, 2.0 if scope == "solve:execute" else 1.0)
+            if scope == "admin:*" and not principal.authenticated:
+                raise PermissionError("admin endpoints require an authenticated organization key")
+            weight = 2.0 if scope == "solve:execute" else 1.0
+            self.rate_limiter.check(f"{principal.org_id}:{principal.key_id}", weight)
+            self._principal = principal
             return principal
         except AgentWebError as error:
             self._error(error, request_id)
@@ -84,19 +102,26 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok", "service": "agentweb"}, request_id)
             return
-        if self._authenticate("memory:read" if path.startswith(("/memory/", "/report/")) else "observe:manage", request_id) is None:
+        if path.startswith("/admin/"):
+            scope = "admin:*"
+        elif path.startswith(("/memory/", "/report/")):
+            scope = "memory:read"
+        else:
+            scope = "observe:manage"
+        principal = self._authenticate(scope, request_id)
+        if principal is None:
             return
         try:
             if path.startswith("/observe/"):
                 monitor_id = path.rsplit("/", 1)[-1]
-                monitor = self.engine.memory.get_monitor(monitor_id)
+                monitor = self.engine.memory.get_monitor(monitor_id, principal.org_id)
                 if not monitor:
                     raise NotFoundError("monitor not found")
                 self._send_json(HTTPStatus.OK, self.engine.check_monitor(monitor).to_dict(), request_id)
                 return
             if path.startswith("/report/"):
                 execution_id = path.rsplit("/", 1)[-1]
-                trace = self.engine.traces.get(execution_id)
+                trace = self.engine.traces.get(execution_id, principal.org_id)
                 if not trace:
                     raise NotFoundError("execution trace not found")
                 self._send_json(HTTPStatus.OK, trace, request_id)
@@ -111,14 +136,20 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     if not from_hash or not to_hash:
                         raise InvalidRequestError("memory diff requires from and to query parameters")
                     try:
-                        payload = self.engine.memory.diff(target, from_hash, to_hash)
+                        payload = self.engine.memory.diff(target, from_hash, to_hash, principal.org_id)
                     except KeyError as error:
                         raise NotFoundError(str(error)) from error
                     self._send_json(HTTPStatus.OK, payload, request_id)
                     return
                 target = unquote(target_part)
-                snapshots = self.engine.memory.list_snapshots(target)
-                self._send_json(HTTPStatus.OK, {"target": target, "snapshots": snapshots}, request_id)
+                snapshots = self.engine.memory.list_snapshots(target, principal.org_id)
+                self._send_json(HTTPStatus.OK, {"org_id": principal.org_id, "target": target, "snapshots": snapshots}, request_id)
+                return
+            if path == "/admin/keys":
+                self._send_json(HTTPStatus.OK, {"keys": self.authenticator.key_store.list_keys(principal.org_id)}, request_id)
+                return
+            if path == "/admin/audit":
+                self._send_json(HTTPStatus.OK, {"events": self.authenticator.key_store.list_audit(principal.org_id)}, request_id)
                 return
             raise NotFoundError("route not found")
         except AgentWebError as error:
@@ -126,13 +157,21 @@ class AgentWebHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
-        if self._authenticate("observe:manage", request_id) is None:
-            return
         path = urlparse(self.path).path
+        scope = "admin:*" if path.startswith("/admin/keys/") else "observe:manage"
+        principal = self._authenticate(scope, request_id)
+        if principal is None:
+            return
         try:
+            if path.startswith("/admin/keys/"):
+                key_id = path.rsplit("/", 1)[-1]
+                if not self.authenticator.revoke_key(principal.org_id, key_id, principal.key_id):
+                    raise NotFoundError("API key not found")
+                self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
+                return
             if path.startswith("/observe/"):
                 monitor_id = path.rsplit("/", 1)[-1]
-                if not self.engine.memory.delete_monitor(monitor_id):
+                if not self.engine.memory.delete_monitor(monitor_id, principal.org_id):
                     raise NotFoundError("monitor not found")
                 self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
                 return
@@ -150,53 +189,49 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             "/extract": "extract:read",
             "/crawl": "search:read",
             "/browser/sessions": "browser:execute",
+            "/admin/keys": "admin:*",
         }.get(path)
         if scope is None:
             self._error(NotFoundError("route not found"), request_id)
             return
-        if self._authenticate(scope, request_id) is None:
+        principal = self._authenticate(scope, request_id)
+        if principal is None:
             return
         try:
             payload = self._read_json()
             if path == "/solve":
-                response = self.engine.solve(payload.get("task", ""), payload.get("mode", "focus"))
+                response = self.engine.solve(payload.get("task", ""), payload.get("mode", "focus"), principal.org_id)
                 self._send_json(HTTPStatus.OK, response.to_dict(), request_id)
             elif path == "/observe":
                 monitor = self.engine.create_monitor(
-                    payload.get("task", ""), payload.get("frequency", "hourly"), payload.get("webhook_url")
+                    payload.get("task", ""), payload.get("frequency", "hourly"), payload.get("webhook_url"), principal.org_id
                 )
                 self._send_json(HTTPStatus.OK, monitor.to_dict(), request_id)
             elif path == "/search":
                 query = payload.get("query", "")
                 self._send_json(HTTPStatus.OK, {"query": query, "results": search(query, payload.get("limit", 10))}, request_id)
             elif path == "/extract":
-                self._send_json(
-                    HTTPStatus.OK,
-                    self.engine.extract(payload.get("url", ""), payload.get("schema")),
-                    request_id,
-                )
+                self._send_json(HTTPStatus.OK, self.engine.extract(payload.get("url", ""), payload.get("schema")), request_id)
             elif path == "/crawl":
                 result = self.engine.crawler.crawl(
-                    payload.get("start_url", ""),
-                    payload.get("max_pages", 50),
-                    payload.get("depth", 2),
-                    payload.get("url_pattern"),
+                    payload.get("start_url", ""), payload.get("max_pages", 50), payload.get("depth", 2), payload.get("url_pattern")
                 )
                 self._send_json(HTTPStatus.OK, result.to_dict(), request_id)
             elif path == "/browser/sessions":
-                session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []))
+                session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id)
                 self._send_json(HTTPStatus.OK, session.to_dict(), request_id)
+            elif path == "/admin/keys":
+                created = self.authenticator.key_store.create_key(principal.org_id, payload.get("scopes", []), principal.key_id)
+                self._send_json(HTTPStatus.CREATED, created, request_id)
         except AgentWebError as error:
             self._error(error, request_id)
         except (ValueError, TypeError) as error:
             self._error(InvalidRequestError(str(error)), request_id)
         except RuntimeError as error:
             from .errors import UpstreamError
-
             self._error(UpstreamError(str(error)), request_id)
         except Exception as error:  # defensive API boundary; details stay local
             from .errors import AgentWebError as InternalError
-
             self._error(InternalError(str(error)), request_id)
 
     def log_message(self, format: str, *args: object) -> None:
@@ -210,6 +245,6 @@ def create_server(host: str = "127.0.0.1", port: int = 8000, data_path: str = "a
     server = ThreadingHTTPServer((host, port), AgentWebHandler)
     store = MemoryStore(data_path)
     server.engine = AgentWebEngine(store)  # type: ignore[attr-defined]
-    server.authenticator = Authenticator()  # type: ignore[attr-defined]
+    server.authenticator = Authenticator(data_path)  # type: ignore[attr-defined]
     server.rate_limiter = RateLimiter()  # type: ignore[attr-defined]
     return server

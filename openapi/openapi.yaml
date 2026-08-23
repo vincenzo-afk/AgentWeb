@@ -214,6 +214,70 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '503':
           description: Browser runtime unavailable
+  /admin/keys:
+    get:
+      summary: List redacted API keys for the authenticated organization
+      operationId: listApiKeys
+      responses:
+        '200':
+          description: Redacted organization API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKey'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Create a scoped API key for the authenticated organization
+      operationId: createApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scopes]
+              properties:
+                scopes:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: API key secret, returned only at creation time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/keys/{id}:
+    delete:
+      summary: Revoke an API key owned by the authenticated organization
+      operationId: revokeApiKey
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: API key revoked
+        '404':
+          $ref: '#/components/responses/BadRequest'
+  /admin/audit:
+    get:
+      summary: Read immutable security audit events for the organization
+      operationId: listAuditEvents
+      responses:
+        '200':
+          description: Organization audit events
   /extract:
     post:
       summary: Structured extraction from a page
@@ -267,6 +331,33 @@ components:
     Mode:
       type: string
       enum: [flash, focus, dive, monitor]
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+        org_id:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        prefix:
+          type: string
+        created_at:
+          type: number
+        revoked_at:
+          type: number
+          nullable: true
+    ApiKeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          required: [secret]
+          properties:
+            secret:
+              type: string
+              description: Plaintext secret returned only once at creation.
     BrowserRequest:
       type: object
       required: [url]
@@ -405,6 +496,13 @@ components:
       properties:
         id:
           type: string
+        org_id:
+          type: string
+        task:
+          type: string
+        frequency:
+          type: string
+          enum: [minutely, hourly, daily]
         status:
           type: string
           enum: [active, paused, cancelled]

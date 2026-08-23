@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     openapi = (ROOT / "openapi" / "openapi.yaml").read_text(encoding="utf-8")
-    required_paths = ["/health", "/solve", "/observe", "/observe/{id}", "/search", "/crawl", "/browser/sessions", "/extract", "/memory/{target}", "/report/{execution_id}"]
+    required_paths = ["/health", "/solve", "/observe", "/observe/{id}", "/search", "/crawl", "/browser/sessions", "/extract", "/memory/{target}", "/report/{execution_id}", "/admin/keys", "/admin/keys/{id}", "/admin/audit"]
     missing_paths = [path for path in required_paths if path not in openapi]
     if missing_paths:
         raise SystemExit(f"OpenAPI paths missing: {', '.join(missing_paths)}")
@@ -24,6 +24,9 @@ def main() -> None:
             raise SystemExit(f"required repository file missing: {path}")
     for schema_path in (ROOT / "schemas").glob("*.json"):
         json.loads(schema_path.read_text(encoding="utf-8"))
+    monitor_schema = json.loads((ROOT / "schemas" / "monitor.schema.json").read_text(encoding="utf-8"))
+    if "org_id" not in monitor_schema.get("properties", {}):
+        raise SystemExit("monitor schema is missing org_id")
     response_schema = json.loads((ROOT / "schemas" / "solve-response.schema.json").read_text(encoding="utf-8"))
     if "insufficient_evidence" not in response_schema.get("properties", {}):
         raise SystemExit("solve response schema is missing insufficient_evidence")

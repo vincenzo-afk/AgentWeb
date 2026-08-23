@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .auth import RateLimiter
 from .memory import MemoryStore
 from .models import Monitor
 
@@ -26,6 +27,7 @@ class Scheduler:
         self.checker = checker
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
+        self.scheduled_limiter = RateLimiter(capacity=100.0, refill_per_second=100.0 / 3600.0)
 
     def run_once(self, now: float | None = None) -> dict[str, Any] | None:
         """Claim and execute the highest-priority due job; return None when no job is due."""
@@ -34,13 +36,15 @@ class Scheduler:
         if not job:
             return None
         monitor_id = job.get("monitor_id")
-        monitor = self.store.get_monitor(monitor_id) if monitor_id else None
+        org_id = str(job.get("org_id") or "development")
+        monitor = self.store.get_monitor(monitor_id, org_id) if monitor_id else None
         if not monitor or monitor.status != "active":
-            self.store.cancel_job(job["id"])
+            self.store.cancel_job(job["id"], org_id)
             return {"job_id": job["id"], "status": "skipped", "reason": "monitor is unavailable or inactive"}
         try:
+            self.scheduled_limiter.check(org_id, 1.0, bucket="scheduled")
             checked = self.checker(monitor)
-            self.store.acknowledge_job(job["id"], checked.frequency, current)
+            self.store.acknowledge_job(job["id"], checked.frequency, current, org_id)
             return {
                 "job_id": job["id"],
                 "monitor_id": checked.id,
@@ -49,7 +53,7 @@ class Scheduler:
                 "monitor": checked.to_dict(),
             }
         except Exception as error:  # noqa: BLE001 - job boundary must preserve the queue
-            job_status = self.store.fail_job(job["id"], str(error), current)
+            job_status = self.store.fail_job(job["id"], str(error), current, org_id)
             return {
                 "job_id": job["id"],
                 "monitor_id": monitor.id,

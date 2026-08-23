@@ -4,6 +4,7 @@
   "type": "object",
   "properties": {
     "id": { "type": "string" },
+    "org_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
     "task": { "type": "string" },
     "status": { "type": "string", "enum": ["active", "paused", "cancelled"] },
     "frequency": { "type": "string", "enum": ["minutely", "hourly", "daily"] },

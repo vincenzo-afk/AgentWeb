@@ -34,10 +34,11 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Extraction | `POST /extract` parses an HTTP(S) page and returns title, description, normalized text, links, warnings, and optional schema-guided fields. |
 | Parsing and normalization | Standalone parser and normalizer modules handle HTML, JSON, text, PDF fallback warnings, prices, dates, entities, and raw-value preservation. |
 | Trust and ranking | Unsafe target classes are blocked by default; accepted sources are ranked using trust, task relevance, and corroboration signals. |
-| Monitoring | `POST /observe` creates a SQLite-backed monitor; `GET /observe/{id}` checks its URL, records explicit `no_change`/`change_detected`/`check_failed` events, and can deliver signed alerts. |
-| Memory reuse | SQLite stores immutable content versions, hashes, monitor state, and explicit diffs. |
-| Authentication and limits | Bearer keys support endpoint scopes; a process-local token bucket enforces a basic request limit. |
-| Observability | Each solve and monitor operation records secret-safe spans retrievable through `/report/{execution_id}`. |
+| Monitoring | `POST /observe` creates an organization-scoped SQLite monitor; `GET /observe/{id}` checks its URL, records explicit `no_change`/`change_detected`/`check_failed` events, and can deliver signed alerts. |
+| Memory reuse | SQLite stores immutable content versions, hashes, monitor state, and explicit diffs, all scoped by organization. |
+| Authentication and limits | Bearer keys support endpoint scopes; persistent keys are PBKDF2-hashed, organization-scoped, revocable, briefly cached, and protected by per-identity rate limits. |
+| Observability | Each solve, browser, and monitor operation records secret-safe organization-scoped spans retrievable through `/report/{execution_id}`. |
+| Administration | Authenticated `admin:*` keys can create/list/revoke organization keys and read immutable organization audit events; plaintext secrets are returned only once at creation. |
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
 
@@ -109,11 +110,13 @@ Configuration is provided through environment variables and CLI flags. No secret
 | Setting | Default | Description |
 | --- | --- | --- |
 | `AGENTWEB_API_KEY` | unset | Single local bearer key; when set, every API request must include `Authorization: Bearer <value>`. |
-| `AGENTWEB_API_KEYS` | unset | JSON object mapping bearer keys to scope arrays for local scope testing. |
+| `AGENTWEB_API_KEY_ORG` | `env` | Organization ID assigned to the single environment key. |
+| `AGENTWEB_API_KEYS` | unset | JSON object mapping bearer keys to scope arrays, or objects with `scopes` and `org_id`, for local scope testing. |
 | `AGENTWEB_BLOCKED_DOMAINS` | unset | Comma-separated domain suffixes rejected by the trust engine. |
 | `AGENTWEB_WEBHOOK_SIGNING_KEY` | unset | HMAC secret required before change alerts can be delivered. |
 | `AGENTWEB_ALLOW_PRIVATE_TARGETS` | unset | Test-only override for local fixture servers; do not enable in a network-facing deployment. |
 | `AGENTWEB_QUIET` | unset | Set to `1` to suppress request logs. |
+| `AGENTWEB_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed for CORS; wildcard CORS is retained only for unauthenticated local development. |
 | `--host` | `127.0.0.1` | Server bind address. |
 | `--port` | `8000` | Server port. |
 | `--data` | `agentweb.sqlite3` | SQLite database path for monitor and snapshot state. |
@@ -136,7 +139,11 @@ The API returns JSON. The endpoint shapes correspond to the repository's OpenAPI
 | `POST` | `/browser/sessions` | Render a URL with optional `click`, `type`, `wait_for`, `scroll`, and `extract` actions. Requires `browser:execute`. |
 | `GET` | `/memory/{target}` | List immutable snapshots for a target. |
 | `GET` | `/memory/{target}/diff` | Compare two stored snapshots using `from` and `to` hashes. |
-| `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace. |
+| `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace belonging to the caller's organization. |
+| `GET` | `/admin/keys` | List redacted API keys for the caller's organization; requires `admin:*`. |
+| `POST` | `/admin/keys` | Create a scoped organization key; requires `admin:*`; returns the secret only once. |
+| `DELETE` | `/admin/keys/{id}` | Revoke an organization key; requires `admin:*`. |
+| `GET` | `/admin/audit` | Read immutable security events for the caller's organization; requires `admin:*`. |
 
 A successful `/solve` response contains `execution_id`, `mode`, `answer`, `sources`, `citations`, and `created_at`. Each source includes an ID, URL, title, snippet, trust score, and citation flag. Errors use the documented `{ "error": { "type": ..., "message": ... } }` shape.
 
@@ -181,7 +188,7 @@ The longer-term architecture adds richer planning, routing, graph reasoning, and
 
 ## Data and persistence
 
-The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains monitor records, immutable content snapshots, execution traces, and durable scheduler jobs with leases and retry state. The database file is ignored by Git through the repository's `.gitignore`.
+The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains organizations, hashed API keys, immutable content snapshots, organization-scoped monitor records, execution traces, audit events, and durable scheduler jobs with leases and retry state. The database file is ignored by Git through the repository's `.gitignore`.
 
 Monitoring can be checked synchronously through `GET /observe/{id}` or asynchronously by running `agentweb --worker`. The worker claims due jobs, prioritizes minutely monitors, reschedules successful checks by frequency, retries worker failures, and records exhausted jobs as `dead_letter`.
 
@@ -210,7 +217,7 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 ## Current limitations
 
-This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, a hosted search-provider integration, LLM-based synthesis, graph storage, durable API-key management, idempotency records, shared rate limiting, or a distributed scheduler. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
+This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, a hosted search-provider integration, LLM-based synthesis, graph storage, idempotency records, a shared distributed rate limiter, or a distributed scheduler. Organization-scoped persistent API keys, audit events, hashed secret storage, and application-level tenant isolation are implemented in the local SQLite deployment; an external secrets manager and production RDBMS remain deployment work. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
 These limitations are explicit so the repository's runnable behavior remains distinct from the broader product vision and roadmap.
 

@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 from agentweb.alerting import signature
 from agentweb.api import create_server
-from agentweb.auth import Authenticator
+from agentweb.auth import Authenticator, KeyStore
 from agentweb.engine import AgentWebEngine
 from agentweb.errors import AuthenticationError, PermissionError
 from agentweb.fetch import html_to_text
@@ -250,6 +250,108 @@ class AgentWebTests(unittest.TestCase):
                 payload = json.loads(response.read())
             self.assertEqual(payload["status"], "complete")
             self.assertEqual(payload["extracted"][0]["text"], "Hello")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_tenant_isolation_hides_monitor_and_trace_from_other_org(self):
+        data_path = Path(self.temp_dir.name) / "tenants.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin_a = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
+        admin_b = server.authenticator.key_store.create_key("org-b", ["admin:*"])["secret"]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            monitor_body = json.dumps({"task": f"Watch {self.url}", "frequency": "daily"}).encode()
+            request = Request(
+                f"http://127.0.0.1:{server.server_port}/observe",
+                data=monitor_body,
+                method="POST",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {admin_a}"},
+            )
+            with urlopen(request) as response:
+                monitor = json.loads(response.read())
+            monitor_id = monitor["id"]
+            solve = server.engine.solve(f"Summarize {self.url}", org_id="org-a")
+            self.assertIsNotNone(server.engine.traces.get(solve.execution_id, "org-a"))
+            self.assertIsNone(server.engine.traces.get(solve.execution_id, "org-b"))
+            cross_request = Request(
+                f"http://127.0.0.1:{server.server_port}/observe/{monitor_id}",
+                headers={"Authorization": f"Bearer {admin_b}"},
+            )
+            with self.assertRaises(Exception) as context:
+                urlopen(cross_request)
+            self.assertIn("404", str(context.exception))
+            response = server.authenticator.key_store.list_audit("org-a")
+            self.assertTrue(any(event["action"] == "api_key.created" for event in response))
+            self.assertFalse(any(admin_a in json.dumps(event) for event in response))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_persistent_keys_are_hashed_and_admin_listing_is_redacted(self):
+        data_path = Path(self.temp_dir.name) / "keys.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        root = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            body = json.dumps({"scopes": ["search:read"]}).encode()
+            request = Request(
+                f"http://127.0.0.1:{server.server_port}/admin/keys",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {root}"},
+            )
+            with urlopen(request) as response:
+                created = json.loads(response.read())
+            self.assertTrue(created["secret"].startswith("sk-live-"))
+            listing_request = Request(
+                f"http://127.0.0.1:{server.server_port}/admin/keys",
+                headers={"Authorization": f"Bearer {root}"},
+            )
+            with urlopen(listing_request) as response:
+                listing = json.loads(response.read())
+            self.assertTrue(all("secret" not in key for key in listing["keys"]))
+            with __import__("sqlite3").connect(data_path) as connection:
+                stored = connection.execute("SELECT hashed_secret FROM api_keys WHERE id=?", (created["id"],)).fetchone()[0]
+            self.assertNotEqual(stored, created["secret"])
+            self.assertNotIn(created["secret"], stored)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_admin_revocation_is_organization_scoped_and_invalidates_key(self):
+        data_path = Path(self.temp_dir.name) / "revoke.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
+        other = server.authenticator.key_store.create_key("org-b", ["search:read"])
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            revoke_other = Request(
+                f"http://127.0.0.1:{server.server_port}/admin/keys/{other['id']}",
+                method="DELETE",
+                headers={"Authorization": f"Bearer {admin}"},
+            )
+            with self.assertRaises(Exception) as context:
+                urlopen(revoke_other)
+            self.assertIn("404", str(context.exception))
+            own = server.authenticator.key_store.create_key("org-a", ["search:read"])
+            revoke_own = Request(
+                f"http://127.0.0.1:{server.server_port}/admin/keys/{own['id']}",
+                method="DELETE",
+                headers={"Authorization": f"Bearer {admin}"},
+            )
+            with urlopen(revoke_own) as response:
+                self.assertEqual(response.status, 204)
+            with self.assertRaises(Exception):
+                urlopen(Request(
+                    f"http://127.0.0.1:{server.server_port}/search",
+                    data=b'{"query":"test"}',
+                    method="POST",
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {own['secret']}"},
+                ))
         finally:
             server.shutdown()
             server.server_close()
