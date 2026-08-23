@@ -2,7 +2,7 @@
 
 **AgentWeb is a free, dependency-light Internet intelligence platform for grounded research and page monitoring.** The repository contains a runnable Phase 0 MVP that exposes a small HTTP API for searching, extracting, synthesizing source-backed results, and detecting changes in monitored pages.
 
-> The current implementation is intentionally small and local-first: Python's standard library, SQLite, and a public HTML search adapter are enough to run it. The broader platform vision remains documented as a phased roadmap.
+> The current implementation is intentionally small and local-first: Python's standard library, SQLite, and either the free DuckDuckGo HTML adapter or a configured HTTP JSON search provider are enough to run it. The broader platform vision remains documented as a phased roadmap.
 
 ## Contents
 
@@ -30,8 +30,8 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | --- | --- |
 | Grounded research | `POST /solve` accepts a task and returns an answer, sources, citations, execution ID, and timestamp. |
 | Retrieval modes | `flash`, `focus`, `dive`, and `monitor` are accepted; they control the number of returned sources. |
-| Search | `POST /search` uses the public DuckDuckGo HTML results page and returns an empty result list when the provider is unavailable. |
-| Extraction | `POST /extract` parses an HTTP(S) page and returns title, description, normalized text, links, warnings, and optional schema-guided fields. |
+| Search | `POST /search` uses a pluggable provider boundary with free DuckDuckGo fallback, optional HTTP JSON provider configuration, freshness filters, normalized published dates when supplied, and graceful provider failure. |
+| Extraction | `POST /extract` parses an HTTP(S) page and returns title, description, normalized text, links, warnings, overall confidence, field-level confidence, and optional schema-guided fields with confidence scores. |
 | Parsing and normalization | Standalone parser and normalizer modules handle HTML, JSON, text, PDF fallback warnings, prices, dates, entities, and raw-value preservation. |
 | Trust and ranking | Unsafe target classes are blocked by default; accepted sources are ranked using trust, task relevance, and corroboration signals. |
 | Monitoring | `GET /observe` lists organization monitors with cursor pagination; `POST /observe` creates an organization-scoped SQLite monitor; `GET /observe/{id}` checks its URL, records explicit `no_change`/`change_detected`/`check_failed` events, and can deliver signed alerts. |
@@ -157,8 +157,8 @@ The API returns JSON. The endpoint shapes correspond to the repository's OpenAPI
 | `POST` | `/observe` | Create a monitor. Required field: `task`; optional fields: `frequency` and `webhook_url`; supports `Idempotency-Key`. |
 | `GET` | `/observe/{id}` | Check a monitor and return its latest state. |
 | `DELETE` | `/observe/{id}` | Cancel and delete a monitor; supports `Idempotency-Key`. |
-| `POST` | `/search` | Search with required `query` and optional `limit`. |
-| `POST` | `/extract` | Extract a URL with required `url` and optional `schema`. |
+| `POST` | `/search` | Search with required `query` and optional `limit` (maximum 50) and `freshness` (`day`, `week`, `month`, `year`, or `any`). Provider selection is configured through `AGENTWEB_SEARCH_PROVIDER`. |
+| `POST` | `/extract` | Extract a URL with required `url` and optional `schema`; returns overall and field-level confidence metadata. |
 | `POST` | `/browser/sessions` | Render a URL with optional `click`, `type`, `wait_for`, `scroll`, and `extract` actions. Requires `browser:execute`. |
 | `GET` | `/memory/{target}` | List immutable snapshots for a target. |
 | `GET` | `/memory/{target}/diff` | Compare two stored snapshots using `from` and `to` hashes. |
@@ -245,7 +245,8 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 ## Current limitations
 
-This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, a hosted search-provider integration, LLM-based synthesis, graph storage, a shared distributed rate limiter, or a distributed scheduler. External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, and transaction-scoped import are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
+This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, LLM-based synthesis, graph storage, a shared distributed rate limiter, or a distributed scheduler.
+ External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, and transaction-scoped import are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
  Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
 These limitations are explicit so the repository's runnable behavior remains distinct from the broader product vision and roadmap.

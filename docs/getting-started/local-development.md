@@ -24,6 +24,8 @@ The liveness endpoint is available at `http://127.0.0.1:8000/health`. The API ac
 
 For rendered sessions, set `AGENTWEB_CHROMIUM_PATH` to an installed Chromium-compatible binary. The browser adapter creates a new context per request and supports `click`, `type`, `wait_for`, `scroll`, and `extract` actions.
 
+The default search path is the free DuckDuckGo HTML adapter. To use a licensed or self-hosted HTTP JSON provider, set `AGENTWEB_SEARCH_PROVIDER=json` and `AGENTWEB_SEARCH_ENDPOINT=https://search.example.test/query`. The endpoint receives `q`, `limit`, and optional `freshness` query parameters and returns either a result array or `{ "results": [...] }`. If `AGENTWEB_SEARCH_API_KEY` is needed, resolve it through the configured external secret provider rather than committing it to the environment template or repository. A failed configured provider falls back to DuckDuckGo and returns an empty list only if both providers are unavailable.
+
 Run the production scheduler as a separately supervised process so HTTP restarts cannot interrupt monitor timing:
 
 ```bash
@@ -67,4 +69,4 @@ Tests use local HTTP fixtures and do not require a live search provider. The `AG
 
 ## Current implementation boundary
 
-Implemented modules include the HTTP API, search adapter, bounded same-origin crawler, parser, normalizer, extractor, basic ranking, trust and safety gate, isolated rendered browser sessions, SQLite memory, durable monitor jobs, request-driven and scheduled checks, signed webhook delivery, bearer scope checks, rate limiting, organization-scoped SQLite execution traces, fail-closed secret-provider modes, a bounded PostgreSQL relational adapter, and additive migration tooling. The knowledge graph, agent-native plan/execute APIs, distributed dual-write cutover, and event-driven workflows remain roadmap work.
+Implemented modules include the HTTP API, provider-backed search with free fallback, bounded same-origin crawler, parser, confidence-bearing normalizer and extractor, basic ranking, trust and safety gate, isolated rendered browser sessions, SQLite memory, durable monitor jobs, request-driven and scheduled checks, signed webhook delivery, bearer scope checks, rate limiting, organization-scoped SQLite execution traces, fail-closed secret-provider modes, a bounded PostgreSQL relational adapter, and additive migration tooling. The knowledge graph, agent-native plan/execute APIs, distributed dual-write cutover, and event-driven workflows remain roadmap work.

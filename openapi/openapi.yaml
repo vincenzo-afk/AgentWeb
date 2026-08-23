@@ -173,9 +173,13 @@ paths:
                 limit:
                   type: integer
                   default: 10
+                  maximum: 50
+                freshness:
+                  type: string
+                  enum: [day, week, month, year, any]
       responses:
         '200':
-          description: Search results
+          description: Provider-backed search results with local fallback
   /crawl:
     post:
       summary: Traverse same-origin pages with bounded breadth-first crawling
@@ -338,7 +342,11 @@ paths:
                   type: object
       responses:
         '200':
-          description: Extracted structured data
+          description: Extracted structured data with confidence metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractResponse'
 components:
   parameters:
     IdempotencyKey:
@@ -410,6 +418,40 @@ components:
             type: integer
         estimated_cost:
           type: number
+    ExtractResponse:
+      type: object
+      required: [url, status, text, field_confidence, confidence]
+      properties:
+        url:
+          type: string
+        status:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        text:
+          type: string
+        links:
+          type: array
+          items:
+            type: string
+        parse_warnings:
+          type: array
+          items:
+            type: string
+        field_confidence:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+            maximum: 1
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        data:
+          type: object
     ApiKey:
       type: object
       properties:

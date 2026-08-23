@@ -21,6 +21,7 @@ from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
 from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError
+from agentweb.search import SearchProviderConfig, search
 from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
 from agentweb.normalizer import normalize
 from agentweb.parser import parse
@@ -60,6 +61,10 @@ class AgentWebTests(unittest.TestCase):
         os.environ.pop("AGENTWEB_ENV", None)
         os.environ.pop("AGENTWEB_SECRET_PROVIDER", None)
         os.environ.pop("AGENTWEB_DB_POOL_SIZE", None)
+        os.environ.pop("AGENTWEB_SEARCH_PROVIDER", None)
+        os.environ.pop("AGENTWEB_SEARCH_ENDPOINT", None)
+        os.environ.pop("AGENTWEB_SEARCH_API_KEY", None)
+        os.environ.pop("AGENTWEB_SEARCH_TIMEOUT_SECONDS", None)
         self.fixture.shutdown()
         self.fixture.server_close()
         self.temp_dir.cleanup()
@@ -94,11 +99,31 @@ class AgentWebTests(unittest.TestCase):
         self.assertIn("Hello", session.text)
         self.assertEqual(session.extracted[0]["text"], "Hello")
 
+    def test_provider_backed_search_is_injected_and_forwards_freshness(self):
+        calls = []
+
+        class FakeProvider:
+            def search(self, query, limit=10, freshness=None):
+                calls.append((query, limit, freshness))
+                return [{"url": "https://example.com/result", "title": "Result", "snippet": "Snippet"}]
+
+        provider = FakeProvider()
+        results = search("agentweb", 3, "week", provider)
+        self.assertEqual(results[0]["url"], "https://example.com/result")
+        self.assertEqual(calls, [("agentweb", 3, "week")])
+
+    def test_search_provider_configuration_requires_endpoint_for_json_provider(self):
+        os.environ["AGENTWEB_SEARCH_PROVIDER"] = "json"
+        os.environ.pop("AGENTWEB_SEARCH_ENDPOINT", None)
+        with self.assertRaisesRegex(Exception, "ENDPOINT"):
+            SearchProviderConfig.from_environment()
+
     def test_normalizer_preserves_unparseable_values(self):
         price = normalize("₹42,999", "price")
         self.assertEqual(price.value, 42999)
         self.assertEqual(price.currency, "INR")
         self.assertTrue(price.normalized)
+        self.assertGreater(price.confidence, normalize("unknown", "price").confidence)
         self.assertFalse(normalize("unknown", "price").normalized)
 
     def test_trust_engine_blocks_private_by_default_and_allows_explicit_fixture_mode(self):
@@ -130,10 +155,13 @@ class AgentWebTests(unittest.TestCase):
         self.assertIn("AgentWeb test content", data["text"])
         self.assertEqual(data["links"], ["/next"])
         self.assertGreater(data["trust_score"], 0)
+        self.assertEqual(data["field_confidence"]["title"], 0.95)
+        self.assertGreater(data["confidence"], 0.5)
 
     def test_schema_guided_extract_returns_normalized_field(self):
         data = self.engine.extract(self.url, {"title": "string"})
         self.assertEqual(data["data"]["title"]["value"], "Fixture")
+        self.assertGreaterEqual(data["data"]["title"]["confidence"], 0.8)
 
     def test_solve_direct_url_returns_citation_and_trace(self):
         response = self.engine.solve(f"Summarize {self.url}", mode="focus")

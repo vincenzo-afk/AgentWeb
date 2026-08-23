@@ -15,6 +15,7 @@ class NormalizedField:
     normalized: bool
     raw: object
     currency: str | None = None
+    confidence: float = 0.0
 
 
 def _price(raw: object) -> NormalizedField:
@@ -28,9 +29,9 @@ def _price(raw: object) -> NormalizedField:
     try:
         number = Decimal(cleaned)
         value: int | float = int(number) if number == number.to_integral_value() else float(number)
-        return NormalizedField(value=value, expected_type="price", normalized=True, raw=raw, currency=currency)
+        return NormalizedField(value=value, expected_type="price", normalized=True, raw=raw, currency=currency, confidence=0.95)
     except (InvalidOperation, ValueError):
-        return NormalizedField(value=raw, expected_type="price", normalized=False, raw=raw, currency=currency)
+        return NormalizedField(value=raw, expected_type="price", normalized=False, raw=raw, currency=currency, confidence=0.20)
 
 
 def _date(raw: object) -> NormalizedField:
@@ -44,6 +45,7 @@ def _date(raw: object) -> NormalizedField:
                 expected_type="date",
                 normalized=True,
                 raw=raw,
+                confidence=0.95,
             )
         except ValueError:
             continue
@@ -51,21 +53,21 @@ def _date(raw: object) -> NormalizedField:
         try:
             parsed = datetime.strptime(text, fmt)
             return NormalizedField(
-                value=parsed.date().isoformat(), expected_type="date", normalized=True, raw=raw
+                value=parsed.date().isoformat(), expected_type="date", normalized=True, raw=raw, confidence=0.90
             )
         except ValueError:
             continue
-    return NormalizedField(value=raw, expected_type="date", normalized=False, raw=raw)
+    return NormalizedField(value=raw, expected_type="date", normalized=False, raw=raw, confidence=0.20)
 
 
 def _entity(raw: object) -> NormalizedField:
     text = re.sub(r"\s+", " ", str(raw).strip())
     text = re.sub(r"\s+([,.;:])", r"\1", text)
-    return NormalizedField(value=text, expected_type="entity", normalized=bool(text), raw=raw)
+    return NormalizedField(value=text, expected_type="entity", normalized=bool(text), raw=raw, confidence=0.85 if text else 0.0)
 
 
 def normalize(raw: object, expected_type: str) -> NormalizedField:
-    """Normalize a field; unsupported types remain raw and are marked unnormalized."""
+    """Normalize a field; unsupported types remain raw and receive low confidence."""
     kind = expected_type.strip().lower()
     if kind == "price":
         return _price(raw)
@@ -73,4 +75,4 @@ def normalize(raw: object, expected_type: str) -> NormalizedField:
         return _date(raw)
     if kind in {"entity", "entity_name", "string"}:
         return _entity(raw)
-    return NormalizedField(value=raw, expected_type=kind, normalized=False, raw=raw)
+    return NormalizedField(value=raw, expected_type=kind, normalized=False, raw=raw, confidence=0.20 if raw not in (None, "") else 0.0)

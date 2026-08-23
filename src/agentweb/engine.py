@@ -18,7 +18,7 @@ from .normalizer import normalize
 from .parser import parse
 from .ranking import rank
 from .scheduler import Scheduler
-from .search import search
+from .search import SearchProvider, build_search_provider, search
 from .secrets import SecretProvider, build_provider
 from .trace import Span, TraceStore
 from .trust_engine import TrustEngine
@@ -27,9 +27,15 @@ URL_RE = re.compile(r"https?://[^\s)\]>]+")
 
 
 class AgentWebEngine:
-    def __init__(self, memory: MemoryStore | None = None, secret_provider: SecretProvider | None = None) -> None:
+    def __init__(
+        self,
+        memory: MemoryStore | None = None,
+        secret_provider: SecretProvider | None = None,
+        search_provider: SearchProvider | None = None,
+    ) -> None:
         self.memory = memory or MemoryStore()
         self.secret_provider = secret_provider or build_provider()
+        self.search_provider = search_provider or build_search_provider(self.secret_provider)
         self.traces = TraceStore(self.memory.path)
         self.trust_engine = TrustEngine(
             blocked_domains={domain for domain in os.getenv("AGENTWEB_BLOCKED_DOMAINS", "").split(",") if domain}
@@ -127,6 +133,15 @@ class AgentWebEngine:
         title = parsed.title
         description = extract_metadata(result.body)[1]
         text = parsed.text or html_to_text(result.body)
+        base_confidence = 0.85 if text else 0.20
+        if parsed.parse_warnings:
+            base_confidence = max(0.20, base_confidence - 0.20 * len(parsed.parse_warnings))
+        field_confidence = {
+            "title": 0.95 if title else 0.20,
+            "description": 0.85 if description else 0.20,
+            "text": round(base_confidence, 2),
+            "links": 0.85 if parsed.links else 0.20,
+        }
         data = {
             "url": result.url,
             "status": result.status,
@@ -135,14 +150,19 @@ class AgentWebEngine:
             "text": text,
             "links": parsed.links,
             "parse_warnings": parsed.parse_warnings,
+            "field_confidence": field_confidence,
+            "confidence": round(sum(field_confidence.values()) / len(field_confidence), 2),
             "trust_score": self._trust_score(result.url, title),
         }
         if requested_schema:
             structured: dict[str, dict] = {}
             for field, expected_type in requested_schema.items():
                 candidate = title if field.lower() == "title" else text[:200]
-                structured[field] = normalize(candidate, str(expected_type)).__dict__
+                normalized_field = normalize(candidate, str(expected_type))
+                structured[field] = normalized_field.__dict__
             data["data"] = structured
+            data["field_confidence"].update({field: value["confidence"] for field, value in structured.items()})
+            data["confidence"] = round(sum(data["field_confidence"].values()) / len(data["field_confidence"]), 2)
         return data
 
     def solve(self, task: str, mode: str = "focus", org_id: str = "development") -> SolveResponse:
@@ -176,7 +196,7 @@ class AgentWebEngine:
 
         if not source_candidates:
             search_started = time.time()
-            search_results = search(task, limit=5 if mode in {"focus", "dive"} else 3)
+            search_results = search(task, limit=5 if mode in {"focus", "dive"} else 3, provider=self.search_provider)
             spans.append(self._span("search", "search", search_started, "complete", task, f"{len(search_results)} result(s)"))
             for item in search_results:
                 source_candidates.append(

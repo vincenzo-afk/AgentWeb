@@ -56,7 +56,7 @@ def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, b
 
 
 class AgentWebHandler(BaseHTTPRequestHandler):
-    server_version = "AgentWeb/0.4"
+    server_version = "AgentWeb/0.6"
 
     @property
     def engine(self) -> AgentWebEngine:
@@ -316,7 +316,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 response_payload = monitor.to_dict()
             elif path == "/search":
                 query = payload.get("query", "")
-                response_payload = {"query": query, "results": search(query, payload.get("limit", 10))}
+                response_payload = {"query": query, "results": search(query, payload.get("limit", 10), payload.get("freshness"), self.engine.search_provider)}
             elif path == "/extract":
                 response_payload = self.engine.extract(payload.get("url", ""), payload.get("schema"))
             elif path == "/crawl":

@@ -7,14 +7,14 @@ This document maps the runnable repository to the implementation-facing specific
 | Module | Status | Evidence | Next completion work |
 |---|---|---|---|
 | API tier | Partial | `src/agentweb/api.py` exposes health, solve, observe/list, search, crawl, extract, memory, report, authenticated admin key/audit/usage routes, organization-scoped ownership checks, request IDs, scope auth, restricted CORS, per-identity rate limiting, cursor pagination, and idempotent mutating operations. Startup resolves platform secrets through the provider boundary. | Add full response-envelope parity and deferred plan/execute/graph endpoints only when their contracts are approved. |
-| Search | Partial | `src/agentweb/search.py` provides a public HTML adapter with normalized URL/title/snippet output. | Add provider interface, freshness handling, retry policy, and typed failures. |
+| Search | Implemented | `src/agentweb/search.py` defines a pluggable provider protocol, free DuckDuckGo HTML adapter, configurable HTTP JSON provider, freshness forwarding, normalized result limits, typed provider failures, and fallback behavior. | Add licensed-provider-specific adapters and richer freshness metadata when a deployment supplies them. |
 | Parser | Implemented | `src/agentweb/parser.py` parses HTML, JSON, text, and PDF fallbacks with warnings. | Add richer table and layout parsing when a dependency policy permits it. |
-| Normalizer | Implemented | `src/agentweb/normalizer.py` canonicalizes prices, dates, entities, and preserves raw values on failure. | Expand locale-specific date and currency coverage. |
+| Normalizer | Implemented | `src/agentweb/normalizer.py` canonicalizes prices, dates, entities, preserves raw values on failure, and emits deterministic confidence values reflecting normalization success. | Expand locale-specific date and currency coverage. |
 | Crawler | Partial | `src/agentweb/crawler.py` performs bounded same-origin breadth-first traversal with URL deduplication, depth/page limits, robots handling, and truncation reporting. | Add scheduler-aware rate limiting and richer crawl persistence. |
-| Extractor | Partial | `AgentWebEngine.extract` returns parsed metadata, links, warnings, trust score, and schema-guided normalized fields. | Add per-field confidence and richer tables/entities. |
+| Extractor | Partial | `AgentWebEngine.extract` returns parsed metadata, links, warnings, trust score, overall confidence, field-level confidence, and schema-guided normalized fields with deterministic normalization confidence. | Add richer tables/entities and source-span evidence when parser contracts expand. |
 | Memory | Implemented | `src/agentweb/memory.py` stores immutable organization-scoped content versions with latest lookup, hash diff, monitor state, tenant-owned scheduler jobs, leases, retries, dead-letter state, 24-hour idempotency records, and monthly usage aggregates. Production relational ownership is exposed separately through `rdbms.py`; runtime cutover remains explicit. | Add retention and task-aware reuse windows. |
 | Trust Engine | Implemented | `src/agentweb/trust_engine.py` blocks unsafe target classes by default and supports explicit blocked domains. | Add robots.txt and policy-aware decisions at the crawler boundary. |
-| Ranking | Implemented | `src/agentweb/ranking.py` combines trust, task relevance, and corroboration into deterministic ordering. | Add recency and extraction-confidence signals when source metadata is available. |
+| Ranking | Implemented | `src/agentweb/ranking.py` combines trust, task relevance, and corroboration into deterministic ordering. | Consume recency and extraction-confidence signals when source metadata is available. |
 | Synthesis | Partial | `solve` returns source-backed text, citation spans, and explicit `insufficient_evidence`. | Add conflict-aware output metadata and richer structured formats. |
 | Monitor | Implemented | Monitor creation, cursor-paginated listing, request-driven and scheduled checks, webhook URL persistence, usage accounting, and explicit `check_failed`/`no_change`/`change_detected` events are implemented. | Add task-specific meaningful-change policies and durable delivery-attempt records. |
 | Scheduler | Implemented | `src/agentweb/scheduler.py` executes durable SQLite jobs with leases, frequency priorities, retries, and dead-letter transitions; `agentweb --worker` runs it as a separate process. | Add distributed lease coordination and queue metrics for multi-node deployments. |
@@ -26,7 +26,7 @@ This document maps the runnable repository to the implementation-facing specific
 
 ## Build order for this iteration
 
-This slice follows the dependency graph through the API reliability boundary: **tenant-scoped request identity → idempotency claim/replay → usage accounting → cursor pagination → documented admin visibility**. Graph, agent-native APIs, and event-driven workflow automation remain out of scope because the project scope explicitly defers them.
+This slice follows the dependency graph through the retrieval-quality boundary: **provider abstraction → freshness-aware normalized results → local fallback → parse-quality signals → field-level confidence**. Graph, agent-native APIs, and event-driven workflow automation remain out of scope because the project scope explicitly defers them.
 
 ## Done criteria for this slice
 
