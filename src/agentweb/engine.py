@@ -9,6 +9,7 @@ import uuid
 from urllib.parse import urlparse
 
 from .alerting import send_webhook
+from .browser import BrowserEngine
 from .crawler import Crawler
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .memory import MemoryStore
@@ -16,6 +17,7 @@ from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .parser import parse
 from .ranking import rank
+from .scheduler import Scheduler
 from .search import search
 from .trace import Span, TraceStore
 from .trust_engine import TrustEngine
@@ -31,6 +33,8 @@ class AgentWebEngine:
             blocked_domains={domain for domain in os.getenv("AGENTWEB_BLOCKED_DOMAINS", "").split(",") if domain}
         )
         self.crawler = Crawler(self.trust_engine)
+        self.browser = BrowserEngine(self.trust_engine)
+        self.scheduler = Scheduler(self.memory, self.check_monitor)
 
     @staticmethod
     def _trust_score(url: str, title: str = "") -> float:
@@ -84,6 +88,26 @@ class AgentWebEngine:
             snippet=text[:240],
             trust_score=self._trust_score(result.url, title),
         )
+
+    def browser_open(self, url: str, actions: list[dict] | None = None):
+        """Render a page through the isolated browser adapter and persist a trace."""
+        started = time.time()
+        execution_id = "exec_" + uuid.uuid4().hex[:16]
+        try:
+            session = self.browser.open(url, actions)
+            self.traces.save(
+                execution_id,
+                [self._span("browser", "open", started, session.status, url, f"{len(session.actions)} action(s)")],
+                status=session.status,
+            )
+            return session
+        except Exception as error:
+            self.traces.save(
+                execution_id,
+                [self._span("browser", "open", started, "failed", url, str(error))],
+                status="failed",
+            )
+            raise
 
     def extract(self, url: str, requested_schema: dict | None = None) -> dict:
         validate_url(url)
@@ -191,7 +215,7 @@ class AgentWebEngine:
             insufficient_evidence=insufficient,
         )
 
-    def create_monitor(self, task: str, frequency: str = "daily", webhook_url: str | None = None) -> Monitor:
+    def create_monitor(self, task: str, frequency: str = "hourly", webhook_url: str | None = None) -> Monitor:
         task = task.strip()
         if not task or len(task) > 2000:
             raise ValueError("task must contain between 1 and 2000 characters")

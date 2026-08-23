@@ -16,16 +16,17 @@ This document maps the runnable repository to the implementation-facing specific
 | Trust Engine | Implemented | `src/agentweb/trust_engine.py` blocks unsafe target classes by default and supports explicit blocked domains. | Add robots.txt and policy-aware decisions at the crawler boundary. |
 | Ranking | Implemented | `src/agentweb/ranking.py` combines trust, task relevance, and corroboration into deterministic ordering. | Add recency and extraction-confidence signals when source metadata is available. |
 | Synthesis | Partial | `solve` returns source-backed text, citation spans, and explicit `insufficient_evidence`. | Add conflict-aware output metadata and richer structured formats. |
-| Monitor | Partial | Monitor creation, request-driven checks, webhook URL persistence, and explicit `check_failed`/`no_change`/`change_detected` events are implemented. | Add a scheduler worker and frequency enforcement. |
+| Monitor | Implemented | Monitor creation, request-driven and scheduled checks, webhook URL persistence, and explicit `check_failed`/`no_change`/`change_detected` events are implemented. | Add task-specific meaningful-change policies and durable delivery-attempt records. |
+| Scheduler | Implemented | `src/agentweb/scheduler.py` executes durable SQLite jobs with leases, frequency priorities, retries, and dead-letter transitions; `agentweb --worker` runs it as a separate process. | Add distributed lease coordination and queue metrics for multi-node deployments. |
 | Alerting | Implemented | `src/agentweb/alerting.py` signs payloads with HMAC-SHA256 and retries bounded deliveries. | Add shared rate limiting and durable delivery-attempt records. |
-| Observability | Partial | `src/agentweb/trace.py` persists secret-safe execution spans and the API exposes `/report/{execution_id}`. | Add metrics and audit-event storage. |
+| Observability | Partial | `src/agentweb/trace.py` persists secret-safe execution spans, including browser operations, and the API exposes `/report/{execution_id}`. | Add metrics and audit-event storage. |
 | Graph | Deferred | Explicitly post-MVP in the roadmap. | Do not implement until Phase 2 scope is approved. |
-| Browser | Deferred | Requires an isolated browser worker and is Phase 1. | Do not implement inside the dependency-free MVP. |
+| Browser | Partial | `src/agentweb/browser.py` provides optional Playwright/Chromium sessions with fresh contexts, same-origin egress filtering, bounded actions, retries, and partial results. | Add a dedicated multi-process worker pool and authenticated-flow credential mechanism. |
 | Planner/Router/Skills | Deferred/partial | Current engine chooses a simple URL/search path directly. | Introduce explicit plan objects only after core Phase 0 contracts are complete. |
 
 ## Build order for this iteration
 
-The next implementation slice follows the dependency graph: **Parser → Normalizer → Trust Engine → Ranking → Memory diff/history → Alerting → Monitor/API integration**. Graph, browser, agent-native APIs, and event-driven workflow automation remain out of scope for this iteration because the project scope explicitly defers them.
+This slice follows the dependency graph through the Phase 1 browser and scheduler foundations: **Browser → durable monitor jobs → leased worker execution → API/CLI integration**. Graph, agent-native APIs, and event-driven workflow automation remain out of scope because the project scope explicitly defers them.
 
 ## Done criteria for this slice
 
@@ -33,4 +34,4 @@ A module is considered complete only when its documented interface is implemente
 
 ## Deliberate local-MVP constraints
 
-The implementation remains standard-library only. Public search and HTTP fetches are adapter boundaries and are not used by deterministic tests. Scheduler execution is represented by a callable seam rather than a background daemon. Webhooks are opt-in and must not be sent unless a monitor explicitly supplies a URL and signing secret is configured.
+The default implementation remains standard-library only. Rendered browser support is an optional free Playwright extra using an environment-provided Chromium binary. Public search and HTTP fetches are adapter boundaries and are not used by deterministic tests. Scheduler execution is a separately supervised foreground worker backed by SQLite leases, retries, and dead-letter state. Webhooks are opt-in and are not sent unless a monitor explicitly supplies a URL and a signing secret is configured.

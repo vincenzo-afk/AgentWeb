@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,6 +53,7 @@ class AgentWebTests(unittest.TestCase):
         os.environ.pop("AGENTWEB_ALLOW_PRIVATE_TARGETS", None)
         os.environ.pop("AGENTWEB_API_KEY", None)
         os.environ.pop("AGENTWEB_API_KEYS", None)
+        os.environ.pop("AGENTWEB_CHROMIUM_PATH", None)
         self.fixture.shutdown()
         self.fixture.server_close()
         self.temp_dir.cleanup()
@@ -72,6 +74,19 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(result.pages[0].depth, 0)
         self.assertEqual(result.pages[1].depth, 1)
         self.assertFalse(result.truncated)
+
+    def test_browser_renders_and_extracts(self):
+        session = self.engine.browser_open(
+            self.url,
+            [
+                {"type": "wait_for", "selector": "h1"},
+                {"type": "extract", "selector": "h1"},
+            ],
+        )
+        self.assertEqual(session.status, "complete")
+        self.assertEqual(session.title, "Fixture")
+        self.assertIn("Hello", session.text)
+        self.assertEqual(session.extracted[0]["text"], "Hello")
 
     def test_normalizer_preserves_unparseable_values(self):
         price = normalize("₹42,999", "price")
@@ -140,6 +155,37 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(result.last_event, "check_failed")
         self.assertIsNotNone(result.last_error)
 
+    def test_scheduler_runs_due_monitor_and_reschedules(self):
+        monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
+        now = time.time() + 1
+        result = self.engine.scheduler.run_once(now=now)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["monitor_id"], monitor.id)
+        job = self.store.list_jobs()[0]
+        self.assertEqual(job["status"], "pending")
+        self.assertEqual(job["attempts"], 0)
+        self.assertGreater(job["run_at"], now)
+
+    def test_scheduler_prioritizes_minutely_monitor(self):
+        daily = self.engine.create_monitor(f"Daily {self.url}", "daily")
+        minutely = self.engine.create_monitor(f"Minutely {self.url}", "minutely")
+        result = self.engine.scheduler.run_once(now=time.time() + 1)
+        self.assertEqual(result["monitor_id"], minutely.id)
+        self.assertNotEqual(result["monitor_id"], daily.id)
+
+    def test_scheduler_moves_repeated_failures_to_dead_letter(self):
+        monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
+        job = self.store.list_jobs()[0]
+        base = time.time() + 1
+        for attempt in range(5):
+            now = base + (attempt * 60)
+            claimed = self.store.claim_due_job(now=now, lease_seconds=1)
+            self.assertIsNotNone(claimed)
+            status = self.store.fail_job(job["id"], "temporary failure", now=now)
+            if attempt < 4:
+                self.assertEqual(status, "pending")
+        self.assertEqual(self.store.get_job(job["id"])["status"], "dead_letter")
+
     def test_webhook_signature_is_deterministic(self):
         body = b'{"ok":true}'
         expected_digest = hmac.new(b"secret", b"1700000000." + body, hashlib.sha256).hexdigest()
@@ -183,6 +229,27 @@ class AgentWebTests(unittest.TestCase):
                 payload = json.loads(response.read())
             self.assertEqual(payload["pages_crawled"], 2)
             self.assertFalse(payload["truncated"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_browser_route_returns_rendered_session(self):
+        os.environ["AGENTWEB_CHROMIUM_PATH"] = "/usr/bin/chromium"
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "browser.sqlite3"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            body = json.dumps({"url": self.url, "actions": [{"type": "extract", "selector": "h1"}]}).encode()
+            request = Request(
+                f"http://127.0.0.1:{server.server_port}/browser/sessions",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(request) as response:
+                payload = json.loads(response.read())
+            self.assertEqual(payload["status"], "complete")
+            self.assertEqual(payload["extracted"][0]["text"], "Hello")
         finally:
             server.shutdown()
             server.server_close()

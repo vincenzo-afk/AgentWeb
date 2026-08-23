@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     openapi = (ROOT / "openapi" / "openapi.yaml").read_text(encoding="utf-8")
-    required_paths = ["/health", "/solve", "/observe", "/observe/{id}", "/search", "/crawl", "/extract", "/memory/{target}", "/report/{execution_id}"]
+    required_paths = ["/health", "/solve", "/observe", "/observe/{id}", "/search", "/crawl", "/browser/sessions", "/extract", "/memory/{target}", "/report/{execution_id}"]
     missing_paths = [path for path in required_paths if path not in openapi]
     if missing_paths:
         raise SystemExit(f"OpenAPI paths missing: {', '.join(missing_paths)}")

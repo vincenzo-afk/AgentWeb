@@ -191,6 +191,29 @@ paths:
           description: Crawled pages and truncation state
         '400':
           $ref: '#/components/responses/BadRequest'
+  /browser/sessions:
+    post:
+      summary: Render a page and execute bounded browser actions
+      operationId: browserOpen
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserRequest'
+      responses:
+        '200':
+          description: Rendered browser session, including partial results on action failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: Browser runtime unavailable
   /extract:
     post:
       summary: Structured extraction from a page
@@ -228,6 +251,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: API key does not have the required scope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     RateLimited:
       description: Rate limit exceeded
       content:
@@ -238,6 +267,64 @@ components:
     Mode:
       type: string
       enum: [flash, focus, dive, monitor]
+    BrowserRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        actions:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [type]
+            properties:
+              type:
+                type: string
+                enum: [click, type, wait_for, scroll, extract]
+              selector:
+                type: string
+              text:
+                type: string
+              attribute:
+                type: string
+              state:
+                type: string
+                enum: [attached, detached, visible, hidden]
+              amount:
+                type: integer
+    BrowserSession:
+      type: object
+      properties:
+        session_id:
+          type: string
+        url:
+          type: string
+        status:
+          type: string
+          enum: [complete, partial]
+        actions:
+          type: array
+          items:
+            type: object
+        extracted:
+          type: array
+          items:
+            type: object
+        title:
+          type: string
+        text:
+          type: string
+        html:
+          type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        error:
+          type: string
     SolveRequest:
       type: object
       required: [task]

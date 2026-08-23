@@ -11,6 +11,7 @@
 | Parser | [module-specs/PARSER_SPEC.md](../module-specs/PARSER_SPEC.md) | Raw content parsing (HTML/PDF/JSON) |
 | Normalizer | [module-specs/NORMALIZER_SPEC.md](../module-specs/NORMALIZER_SPEC.md) | Canonicalizing extracted fields |
 | Monitor | [module-specs/MONITOR_SPEC.md](../module-specs/MONITOR_SPEC.md) | Scheduled checks, change detection |
+| Scheduler | [data/QUEUE_SPEC.md](../data/QUEUE_SPEC.md) | Durable job claims, retries, and worker execution |
 | Memory | [module-specs/MEMORY_SPEC.md](../module-specs/MEMORY_SPEC.md) | Snapshot/hash/diff/reuse |
 | Graph | [module-specs/GRAPH_SPEC.md](../module-specs/GRAPH_SPEC.md) | Entity/relationship storage and query |
 | Ranking | [module-specs/RANKING_SPEC.md](../module-specs/RANKING_SPEC.md) | Source scoring |

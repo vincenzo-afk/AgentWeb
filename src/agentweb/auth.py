@@ -14,6 +14,7 @@ from .errors import AuthenticationError, PermissionError, RateLimitError
 ALL_SCOPES = {
     "search:read",
     "extract:read",
+    "browser:execute",
     "solve:execute",
     "observe:manage",
     "memory:read",

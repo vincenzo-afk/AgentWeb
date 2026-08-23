@@ -57,3 +57,19 @@ class UpstreamError(AgentWebError):
     error_type = "upstream_error"
     status_code = 502
     retryable = True
+
+
+class BrowserUnavailableError(AgentWebError):
+    error_type = "browser_unavailable"
+    status_code = 503
+    retryable = True
+
+
+class BrowserActionError(AgentWebError):
+    error_type = "browser_action_error"
+    status_code = 502
+    retryable = True
+
+
+class BrowserTimeoutError(BrowserActionError):
+    error_type = "timeout_error"

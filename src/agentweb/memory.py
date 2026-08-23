@@ -1,10 +1,12 @@
-"""SQLite-backed immutable snapshots and monitor state with no external services."""
+"""SQLite-backed immutable snapshots, monitor state, and durable scheduler jobs."""
 
 from __future__ import annotations
 
 import difflib
 import hashlib
 import sqlite3
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +20,9 @@ class MemoryStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
     def _init_db(self) -> None:
@@ -52,13 +55,27 @@ class MemoryStore:
                     last_event TEXT,
                     last_error TEXT
                 );
+                CREATE TABLE IF NOT EXISTS scheduler_jobs (
+                    id TEXT PRIMARY KEY,
+                    job_type TEXT NOT NULL,
+                    monitor_id TEXT,
+                    priority INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    run_at REAL NOT NULL,
+                    lease_until REAL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 5,
+                    last_error TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(job_type, monitor_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_jobs_due
+                    ON scheduler_jobs(status, run_at, priority);
                 """
             )
             columns = {row[1] for row in connection.execute("PRAGMA table_info(monitors)")}
-            for name, definition in (
-                ("webhook_url", "TEXT"),
-                ("last_event", "TEXT"),
-            ):
+            for name, definition in (("webhook_url", "TEXT"), ("last_event", "TEXT")):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE monitors ADD COLUMN {name} {definition}")
             if legacy_snapshots:
@@ -77,10 +94,8 @@ class MemoryStore:
     def get_latest(self, target: str) -> dict[str, str] | None:
         with self._connect() as connection:
             row = connection.execute(
-                """
-                SELECT target, content_hash, content, captured_at
-                FROM snapshots WHERE target = ? ORDER BY id DESC LIMIT 1
-                """,
+                "SELECT target, content_hash, content, captured_at FROM snapshots "
+                "WHERE target = ? ORDER BY id DESC LIMIT 1",
                 (target,),
             ).fetchone()
         return dict(row) if row else None
@@ -92,10 +107,8 @@ class MemoryStore:
     def list_snapshots(self, target: str) -> list[dict[str, str]]:
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT target, content_hash, content, captured_at
-                FROM snapshots WHERE target = ? ORDER BY id ASC
-                """,
+                "SELECT target, content_hash, content, captured_at FROM snapshots "
+                "WHERE target = ? ORDER BY id ASC",
                 (target,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -105,17 +118,12 @@ class MemoryStore:
         content_hash = self.content_hash(content)
         with self._connect() as connection:
             connection.execute(
-                """
-                INSERT OR IGNORE INTO snapshots(target, content_hash, content, captured_at)
-                VALUES(?, ?, ?, ?)
-                """,
+                "INSERT OR IGNORE INTO snapshots(target, content_hash, content, captured_at) VALUES(?, ?, ?, ?)",
                 (target, content_hash, content, captured_at),
             )
             row = connection.execute(
-                """
-                SELECT target, content_hash, content, captured_at
-                FROM snapshots WHERE target = ? AND content_hash = ?
-                """,
+                "SELECT target, content_hash, content, captured_at FROM snapshots "
+                "WHERE target = ? AND content_hash = ?",
                 (target, content_hash),
             ).fetchone()
         return dict(row)
@@ -129,18 +137,16 @@ class MemoryStore:
     def diff(self, target: str, from_hash: str, to_hash: str) -> dict[str, Any]:
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT content_hash, content FROM snapshots
-                WHERE target = ? AND content_hash IN (?, ?)
-                """,
+                "SELECT content_hash, content FROM snapshots "
+                "WHERE target = ? AND content_hash IN (?, ?)",
                 (target, from_hash, to_hash),
             ).fetchall()
         contents = {row["content_hash"]: row["content"] for row in rows}
         if from_hash not in contents or to_hash not in contents:
             raise KeyError("snapshot hash not found for target")
-        before = contents[from_hash].splitlines()
-        after = contents[to_hash].splitlines()
-        changes = list(difflib.unified_diff(before, after, lineterm=""))
+        changes = list(
+            difflib.unified_diff(contents[from_hash].splitlines(), contents[to_hash].splitlines(), lineterm="")
+        )
         return {
             "target": target,
             "from_hash": from_hash,
@@ -150,7 +156,16 @@ class MemoryStore:
             "changes": changes[:100],
         }
 
+    @staticmethod
+    def _frequency_seconds(frequency: str) -> int:
+        return {"minutely": 60, "hourly": 3600, "daily": 86400}.get(frequency, 3600)
+
+    @staticmethod
+    def _frequency_priority(frequency: str) -> int:
+        return {"minutely": 30, "hourly": 20, "daily": 10}.get(frequency, 10)
+
     def create_monitor(self, monitor: Monitor) -> None:
+        now = time.time()
         with self._connect() as connection:
             connection.execute(
                 """
@@ -171,15 +186,27 @@ class MemoryStore:
                     monitor.last_error,
                 ),
             )
+            connection.execute(
+                """
+                INSERT INTO scheduler_jobs(id, job_type, monitor_id, priority, status, run_at,
+                                           lease_until, attempts, max_attempts, last_error, created_at, updated_at)
+                VALUES(?, 'monitor_check', ?, ?, 'pending', ?, NULL, 0, 5, NULL, ?, ?)
+                """,
+                (
+                    "job_" + uuid.uuid4().hex[:16],
+                    monitor.id,
+                    self._frequency_priority(monitor.frequency),
+                    now,
+                    now,
+                    now,
+                ),
+            )
 
     def get_monitor(self, monitor_id: str) -> Monitor | None:
         with self._connect() as connection:
             row = connection.execute(
-                """
-                SELECT id, task, status, frequency, target_url, webhook_url, last_checked_at,
-                       last_change_at, last_event, last_error
-                FROM monitors WHERE id = ?
-                """,
+                "SELECT id, task, status, frequency, target_url, webhook_url, last_checked_at, "
+                "last_change_at, last_event, last_error FROM monitors WHERE id = ?",
                 (monitor_id,),
             ).fetchone()
         return Monitor(**dict(row)) if row else None
@@ -187,10 +214,8 @@ class MemoryStore:
     def update_monitor(self, monitor: Monitor) -> None:
         with self._connect() as connection:
             connection.execute(
-                """
-                UPDATE monitors SET status=?, frequency=?, target_url=?, webhook_url=?,
-                last_checked_at=?, last_change_at=?, last_event=?, last_error=? WHERE id=?
-                """,
+                "UPDATE monitors SET status=?, frequency=?, target_url=?, webhook_url=?, "
+                "last_checked_at=?, last_change_at=?, last_event=?, last_error=? WHERE id=?",
                 (
                     monitor.status,
                     monitor.frequency,
@@ -203,19 +228,107 @@ class MemoryStore:
                     monitor.id,
                 ),
             )
+            if monitor.status != "active":
+                connection.execute(
+                    "UPDATE scheduler_jobs SET status='cancelled', updated_at=? WHERE monitor_id=? "
+                    "AND status IN ('pending', 'leased')",
+                    (time.time(), monitor.id),
+                )
 
     def delete_monitor(self, monitor_id: str) -> bool:
         with self._connect() as connection:
             cursor = connection.execute("DELETE FROM monitors WHERE id = ?", (monitor_id,))
+            connection.execute("DELETE FROM scheduler_jobs WHERE monitor_id = ?", (monitor_id,))
         return cursor.rowcount > 0
+
+    def claim_due_job(self, now: float | None = None, lease_seconds: float = 120.0) -> dict[str, Any] | None:
+        now = time.time() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE scheduler_jobs SET status='pending', lease_until=NULL, updated_at=? "
+                "WHERE status='leased' AND lease_until IS NOT NULL AND lease_until < ?",
+                (now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM scheduler_jobs WHERE status='pending' AND run_at <= ? "
+                "ORDER BY priority DESC, run_at ASC LIMIT 1",
+                (now,),
+            ).fetchone()
+            if not row:
+                connection.commit()
+                return None
+            lease_until = now + lease_seconds
+            connection.execute(
+                "UPDATE scheduler_jobs SET status='leased', lease_until=?, attempts=attempts+1, updated_at=? WHERE id=?",
+                (lease_until, now, row["id"]),
+            )
+            claimed = dict(row)
+            claimed["status"] = "leased"
+            claimed["lease_until"] = lease_until
+            claimed["attempts"] = int(row["attempts"]) + 1
+            connection.commit()
+        return claimed
+
+    def acknowledge_job(self, job_id: str, frequency: str, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        next_run = now + self._frequency_seconds(frequency)
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE scheduler_jobs SET status='pending', run_at=?, lease_until=NULL, attempts=0, "
+                "last_error=NULL, priority=?, updated_at=? WHERE id=?",
+                (next_run, self._frequency_priority(frequency), now, job_id),
+            )
+
+    def fail_job(self, job_id: str, error: str, now: float | None = None) -> str:
+        now = time.time() if now is None else now
+        with self._connect() as connection:
+            row = connection.execute("SELECT attempts, max_attempts FROM scheduler_jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                return "missing"
+            attempts = int(row["attempts"])
+            if attempts >= int(row["max_attempts"]):
+                status = "dead_letter"
+                run_at = now
+            else:
+                status = "pending"
+                run_at = now + min(0.5 * (2 ** max(0, attempts - 1)), 30.0)
+            connection.execute(
+                "UPDATE scheduler_jobs SET status=?, run_at=?, lease_until=NULL, last_error=?, updated_at=? WHERE id=?",
+                (status, run_at, error[:500], now, job_id),
+            )
+        return status
+
+    def cancel_job(self, job_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE scheduler_jobs SET status='cancelled', lease_until=NULL, updated_at=? WHERE id=?",
+                (time.time(), job_id),
+            )
+        return cursor.rowcount > 0
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM scheduler_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_jobs(self, status: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM scheduler_jobs"
+        params: tuple[Any, ...] = ()
+        if status:
+            query += " WHERE status=?"
+            params = (status,)
+        query += " ORDER BY priority DESC, run_at ASC"
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
 
     def export_debug(self) -> dict[str, Any]:
         with self._connect() as connection:
             monitors = [dict(row) for row in connection.execute("SELECT * FROM monitors")]
             snapshots = [
                 dict(row)
-                for row in connection.execute(
-                    "SELECT target, content_hash, captured_at FROM snapshots ORDER BY id"
-                )
+                for row in connection.execute("SELECT target, content_hash, captured_at FROM snapshots ORDER BY id")
             ]
-        return {"monitors": monitors, "snapshots": snapshots}
+            jobs = [dict(row) for row in connection.execute("SELECT * FROM scheduler_jobs ORDER BY run_at")]
+        return {"monitors": monitors, "snapshots": snapshots, "jobs": jobs}

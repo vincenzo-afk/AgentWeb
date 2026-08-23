@@ -1,0 +1,22 @@
+[Unit]
+Description=AgentWeb durable monitor scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentweb
+Group=agentweb
+WorkingDirectory=/srv/agentweb
+EnvironmentFile=-/etc/agentweb/agentweb.env
+ExecStart=/srv/agentweb/.venv/bin/agentweb --worker --data /var/lib/agentweb/agentweb.sqlite3 --poll 1
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agentweb
+
+[Install]
+WantedBy=multi-user.target

@@ -149,6 +149,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             "/search": "search:read",
             "/extract": "extract:read",
             "/crawl": "search:read",
+            "/browser/sessions": "browser:execute",
         }.get(path)
         if scope is None:
             self._error(NotFoundError("route not found"), request_id)
@@ -162,7 +163,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, response.to_dict(), request_id)
             elif path == "/observe":
                 monitor = self.engine.create_monitor(
-                    payload.get("task", ""), payload.get("frequency", "daily"), payload.get("webhook_url")
+                    payload.get("task", ""), payload.get("frequency", "hourly"), payload.get("webhook_url")
                 )
                 self._send_json(HTTPStatus.OK, monitor.to_dict(), request_id)
             elif path == "/search":
@@ -182,6 +183,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     payload.get("url_pattern"),
                 )
                 self._send_json(HTTPStatus.OK, result.to_dict(), request_id)
+            elif path == "/browser/sessions":
+                session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []))
+                self._send_json(HTTPStatus.OK, session.to_dict(), request_id)
         except AgentWebError as error:
             self._error(error, request_id)
         except (ValueError, TypeError) as error:

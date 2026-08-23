@@ -43,7 +43,7 @@ The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](op
 
 ## Quick start
 
-AgentWeb requires **Python 3.11 or newer** and has no runtime dependencies outside the Python standard library. The following commands install the local package in an isolated virtual environment and start the API server.
+AgentWeb requires **Python 3.11 or newer** and has no default runtime dependencies outside the Python standard library. The following commands install the local package in an isolated virtual environment and start the API server.
 
 ```bash
 python3 -m venv .venv
@@ -71,6 +71,25 @@ Run a direct-URL research task:
 curl -X POST http://127.0.0.1:8000/solve \
   -H 'Content-Type: application/json' \
   -d '{"task":"Summarize https://example.com","mode":"focus"}'
+```
+
+For rendered browser sessions, install the optional free browser extra and point AgentWeb at an installed Chromium-compatible binary:
+
+```bash
+python -m pip install -e '.[browser]'
+export AGENTWEB_CHROMIUM_PATH=/usr/bin/chromium
+```
+
+Run the durable monitor scheduler in a separate supervised process:
+
+```bash
+agentweb --worker --data agentweb.sqlite3
+```
+
+Use `--once` for a health check or a cron/supervisor probe that executes one due job and exits:
+
+```bash
+agentweb --worker --once --data agentweb.sqlite3
 ```
 
 Create and check a monitor:
@@ -114,6 +133,7 @@ The API returns JSON. The endpoint shapes correspond to the repository's OpenAPI
 | `DELETE` | `/observe/{id}` | Cancel and delete a monitor. |
 | `POST` | `/search` | Search with required `query` and optional `limit`. |
 | `POST` | `/extract` | Extract a URL with required `url` and optional `schema`. |
+| `POST` | `/browser/sessions` | Render a URL with optional `click`, `type`, `wait_for`, `scroll`, and `extract` actions. Requires `browser:execute`. |
 | `GET` | `/memory/{target}` | List immutable snapshots for a target. |
 | `GET` | `/memory/{target}/diff` | Compare two stored snapshots using `from` and `to` hashes. |
 | `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace. |
@@ -148,19 +168,22 @@ flowchart LR
     Engine --> Fetch[HTTP fetch and extraction]
     Engine --> Trust[Trust scoring]
     Engine --> Memory[SQLite memory]
+    Engine --> Browser[Isolated browser]
+    Memory --> Scheduler[Durable scheduler]
     Search --> Sources[Sources and citations]
     Fetch --> Sources
     Trust --> Sources
     Memory --> Monitor[Monitor state and change detection]
+    Scheduler --> Monitor
 ```
 
-The longer-term architecture adds planning, routing, browser execution, graph reasoning, and synthesis layers. Those are described in [`docs/architecture.md`](docs/architecture.md) but are not claimed as implemented by this MVP.
+The longer-term architecture adds richer planning, routing, graph reasoning, and synthesis layers. Rendered browser execution and durable scheduled monitor jobs are now implemented as bounded foundations; a dedicated multi-process browser pool and distributed scheduler remain future work.
 
 ## Data and persistence
 
-The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains monitor records and content snapshots. The server stores snapshot hashes and normalized text, not a separate external database or queue. The database file is ignored by Git through the repository's `.gitignore`.
+The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains monitor records, immutable content snapshots, execution traces, and durable scheduler jobs with leases and retry state. The database file is ignored by Git through the repository's `.gitignore`.
 
-Monitoring is request-driven in this implementation: `GET /observe/{id}` checks the target when called. A scheduler, webhook delivery, and recurring background worker are future roadmap items and are not silently implied by the current API.
+Monitoring can be checked synchronously through `GET /observe/{id}` or asynchronously by running `agentweb --worker`. The worker claims due jobs, prioritizes minutely monitors, reschedules successful checks by frequency, retries worker failures, and records exhausted jobs as `dead_letter`.
 
 ## Testing
 
@@ -187,7 +210,7 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 ## Current limitations
 
-This repository does not yet implement headless browser execution, a full crawler, a hosted search-provider integration, LLM-based synthesis, graph storage, durable API-key management, idempotency records, scheduled background execution, shared rate limiting, or a multi-process deployment model. Webhook delivery is implemented as an opt-in signed adapter, but no scheduler invokes it automatically. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
+This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, a hosted search-provider integration, LLM-based synthesis, graph storage, durable API-key management, idempotency records, shared rate limiting, or a distributed scheduler. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
 These limitations are explicit so the repository's runnable behavior remains distinct from the broader product vision and roadmap.
 

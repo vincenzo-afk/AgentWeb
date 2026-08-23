@@ -22,6 +22,9 @@ classifiers = [
 
 dependencies = []
 
+[project.optional-dependencies]
+browser = ["playwright>=1.40"]
+
 [project.scripts]
 agentweb = "agentweb.cli:main"
 
