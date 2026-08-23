@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["task"],
   "properties": {
-    "task": { "type": "string", "description": "Natural-language description of intent" },
+    "task": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "Natural-language description of intent" },
     "mode": { "type": "string", "enum": ["flash", "focus", "dive"] },
     "skill": { "type": "string" },
     "inputs": { "type": "object" },

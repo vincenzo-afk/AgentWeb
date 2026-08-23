@@ -1,4 +1,4 @@
-"""Small, serializable data contracts for AgentWeb's Phase 0 API."""
+"""Small, serializable data contracts for AgentWeb's Phase 0/1 API."""
 
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ class SolveResponse:
     sources: list[Source] = field(default_factory=list)
     citations: list[Citation] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now)
+    insufficient_evidence: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -47,8 +48,10 @@ class Monitor:
     status: str = "active"
     frequency: str = "daily"
     target_url: str | None = None
+    webhook_url: str | None = None
     last_checked_at: str | None = None
     last_change_at: str | None = None
+    last_event: str | None = None
     last_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:

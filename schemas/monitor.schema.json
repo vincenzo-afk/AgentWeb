@@ -9,6 +9,8 @@
     "frequency": { "type": "string", "enum": ["minutely", "hourly", "daily"] },
     "webhook_url": { "type": "string", "format": "uri" },
     "last_checked_at": { "type": "string", "format": "date-time" },
-    "last_change_at": { "type": "string", "format": "date-time" }
+    "last_change_at": { "type": "string", "format": "date-time" },
+    "last_event": { "type": "string", "enum": ["no_change", "change_detected", "check_failed"] },
+    "last_error": { "type": "string" }
   }
 }

@@ -4,4 +4,4 @@ from .api import create_server
 from .engine import AgentWebEngine
 
 __all__ = ["AgentWebEngine", "create_server"]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

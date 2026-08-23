@@ -12,6 +12,66 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /health:
+    get:
+      summary: Check local API liveness
+      operationId: health
+      responses:
+        '200':
+          description: Service is healthy
+  /report/{execution_id}:
+    get:
+      summary: Retrieve a secret-safe execution trace
+      operationId: getReport
+      parameters:
+        - name: execution_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Execution trace
+        '404':
+          $ref: '#/components/responses/BadRequest'
+  /memory/{target}:
+    get:
+      summary: List immutable snapshots for a target
+      operationId: getMemory
+      parameters:
+        - name: target
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Snapshot history
+  /memory/{target}/diff:
+    get:
+      summary: Compare two snapshots for a target
+      operationId: getMemoryDiff
+      parameters:
+        - name: target
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Snapshot diff
+        '404':
+          $ref: '#/components/responses/BadRequest'
   /solve:
     post:
       summary: Run a one-shot grounded research/synthesis task
@@ -101,6 +161,36 @@ paths:
       responses:
         '200':
           description: Search results
+  /crawl:
+    post:
+      summary: Traverse same-origin pages with bounded breadth-first crawling
+      operationId: crawl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [start_url]
+              properties:
+                start_url:
+                  type: string
+                  format: uri
+                max_pages:
+                  type: integer
+                  default: 50
+                  maximum: 50
+                depth:
+                  type: integer
+                  default: 2
+                  maximum: 10
+                url_pattern:
+                  type: string
+      responses:
+        '200':
+          description: Crawled pages and truncation state
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /extract:
     post:
       summary: Structured extraction from a page
@@ -171,6 +261,10 @@ components:
           type: string
         url:
           type: string
+        title:
+          type: string
+        snippet:
+          type: string
         trust_score:
           type: number
         cited:
@@ -199,6 +293,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Source'
+        insufficient_evidence:
+          type: boolean
         citations:
           type: array
           items:

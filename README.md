@@ -31,10 +31,13 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Grounded research | `POST /solve` accepts a task and returns an answer, sources, citations, execution ID, and timestamp. |
 | Retrieval modes | `flash`, `focus`, `dive`, and `monitor` are accepted; they control the number of returned sources. |
 | Search | `POST /search` uses the public DuckDuckGo HTML results page and returns an empty result list when the provider is unavailable. |
-| Extraction | `POST /extract` fetches an HTTP(S) page and returns title, description, normalized text, status, and trust score. |
-| Monitoring | `POST /observe` creates a SQLite-backed monitor; `GET /observe/{id}` checks its URL and records content changes; `DELETE /observe/{id}` removes it. |
-| Memory reuse | SQLite stores content hashes and monitor state so unchanged snapshots do not produce false change events. |
-| Authentication | Optional bearer-token authentication is enabled when `AGENTWEB_API_KEY` is set. |
+| Extraction | `POST /extract` parses an HTTP(S) page and returns title, description, normalized text, links, warnings, and optional schema-guided fields. |
+| Parsing and normalization | Standalone parser and normalizer modules handle HTML, JSON, text, PDF fallback warnings, prices, dates, entities, and raw-value preservation. |
+| Trust and ranking | Unsafe target classes are blocked by default; accepted sources are ranked using trust, task relevance, and corroboration signals. |
+| Monitoring | `POST /observe` creates a SQLite-backed monitor; `GET /observe/{id}` checks its URL, records explicit `no_change`/`change_detected`/`check_failed` events, and can deliver signed alerts. |
+| Memory reuse | SQLite stores immutable content versions, hashes, monitor state, and explicit diffs. |
+| Authentication and limits | Bearer keys support endpoint scopes; a process-local token bucket enforces a basic request limit. |
+| Observability | Each solve and monitor operation records secret-safe spans retrievable through `/report/{execution_id}`. |
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
 
@@ -86,7 +89,11 @@ Configuration is provided through environment variables and CLI flags. No secret
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `AGENTWEB_API_KEY` | unset | When set, every API request must include `Authorization: Bearer <value>`. |
+| `AGENTWEB_API_KEY` | unset | Single local bearer key; when set, every API request must include `Authorization: Bearer <value>`. |
+| `AGENTWEB_API_KEYS` | unset | JSON object mapping bearer keys to scope arrays for local scope testing. |
+| `AGENTWEB_BLOCKED_DOMAINS` | unset | Comma-separated domain suffixes rejected by the trust engine. |
+| `AGENTWEB_WEBHOOK_SIGNING_KEY` | unset | HMAC secret required before change alerts can be delivered. |
+| `AGENTWEB_ALLOW_PRIVATE_TARGETS` | unset | Test-only override for local fixture servers; do not enable in a network-facing deployment. |
 | `AGENTWEB_QUIET` | unset | Set to `1` to suppress request logs. |
 | `--host` | `127.0.0.1` | Server bind address. |
 | `--port` | `8000` | Server port. |
@@ -107,6 +114,9 @@ The API returns JSON. The endpoint shapes correspond to the repository's OpenAPI
 | `DELETE` | `/observe/{id}` | Cancel and delete a monitor. |
 | `POST` | `/search` | Search with required `query` and optional `limit`. |
 | `POST` | `/extract` | Extract a URL with required `url` and optional `schema`. |
+| `GET` | `/memory/{target}` | List immutable snapshots for a target. |
+| `GET` | `/memory/{target}/diff` | Compare two stored snapshots using `from` and `to` hashes. |
+| `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace. |
 
 A successful `/solve` response contains `execution_id`, `mode`, `answer`, `sources`, `citations`, and `created_at`. Each source includes an ID, URL, title, snippet, trust score, and citation flag. Errors use the documented `{ "error": { "type": ..., "message": ... } }` shape.
 
@@ -161,7 +171,7 @@ python3 -m compileall -q src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-The continuous integration workflow runs the same checks on Python 3.11.
+The continuous integration workflow runs the same checks on Python 3.11. GitHub Actions may still be unavailable when account-level Actions policy disables execution; local validation remains deterministic.
 
 ## Project structure
 
@@ -177,13 +187,13 @@ The continuous integration workflow runs the same checks on Python 3.11.
 
 ## Current limitations
 
-This repository does not yet implement headless browser execution, a full crawler, a hosted search provider integration, LLM-based synthesis, graph storage, webhook delivery, scheduled background execution, rate limiting, or a multi-process deployment model. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
+This repository does not yet implement headless browser execution, a full crawler, a hosted search-provider integration, LLM-based synthesis, graph storage, durable API-key management, idempotency records, scheduled background execution, shared rate limiting, or a multi-process deployment model. Webhook delivery is implemented as an opt-in signed adapter, but no scheduler invokes it automatically. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format. Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
 These limitations are explicit so the repository's runnable behavior remains distinct from the broader product vision and roadmap.
 
 ## Roadmap
 
-The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). Phase 0 is the current implementation baseline. Future phases cover deeper retrieval modes, crawl and extraction expansion, webhooks, full snapshot history, graph reasoning, agent-native execution APIs, and event-driven workflows.
+The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline and several Phase 1 foundations. Future phases cover the full crawler, rendered browser execution, connector registry, scheduled workers, graph reasoning, agent-native execution APIs, and event-driven workflows.
 
 ## Contributing
 
