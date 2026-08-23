@@ -267,7 +267,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, {"events": events, "data": events, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
             if path == "/admin/metrics":
-                self._send_json(HTTPStatus.OK, self.metrics.snapshot(principal.org_id), request_id)
+                metrics = self.metrics.snapshot(principal.org_id)
+                metrics["gauges"].update({f"queue_{key}": value for key, value in self.engine.memory.queue_summary(principal.org_id).items()})
+                self._send_json(HTTPStatus.OK, metrics, request_id)
                 return
             if path == "/admin/usage":
                 period = query.get("period", [None])[0]

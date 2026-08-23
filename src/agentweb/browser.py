@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import time
+from contextlib import contextmanager
 import uuid
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urlparse
@@ -44,12 +46,29 @@ class BrowserEngine:
         action_timeout: float = 30.0,
         session_timeout: float = 90.0,
         allow_cross_origin: bool = False,
+        max_workers: int | None = None,
     ) -> None:
         self.trust_engine = trust_engine or TrustEngine()
         self.executable_path = executable_path or os.getenv("AGENTWEB_CHROMIUM_PATH")
         self.action_timeout = action_timeout
         self.session_timeout = session_timeout
         self.allow_cross_origin = allow_cross_origin
+        configured_workers = os.getenv("AGENTWEB_BROWSER_WORKERS", "2")
+        try:
+            workers = int(configured_workers) if max_workers is None else int(max_workers)
+        except (TypeError, ValueError):
+            workers = 2
+        self.max_workers = max(1, min(workers, 16))
+        self._worker_slots = threading.BoundedSemaphore(self.max_workers)
+
+    @contextmanager
+    def _worker_slot(self):
+        if not self._worker_slots.acquire(timeout=max(0.1, self.session_timeout)):
+            raise BrowserUnavailableError("browser worker pool is at capacity")
+        try:
+            yield
+        finally:
+            self._worker_slots.release()
 
     def _browser_path(self) -> str | None:
         if self.executable_path:
@@ -96,7 +115,7 @@ class BrowserEngine:
                 return True
             return f"{parsed.scheme}://{parsed.netloc}" == origin
 
-        with sync_playwright() as playwright:
+        with self._worker_slot(), sync_playwright() as playwright:
             browser = None
             context = None
             try:

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Monitor
+from .redaction import redact_mapping
 
 
 class MemoryStore:
@@ -599,6 +600,20 @@ class MemoryStore:
             rows = connection.execute(query, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
+    def queue_summary(self, org_id: str) -> dict[str, int]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM scheduler_jobs WHERE org_id=? GROUP BY status",
+                (org_id,),
+            ).fetchall()
+            due = connection.execute(
+                "SELECT COUNT(*) AS count FROM scheduler_jobs WHERE org_id=? AND status='pending' AND run_at <= ?",
+                (org_id, time.time()),
+            ).fetchone()
+        summary = {str(row["status"]): int(row["count"]) for row in rows}
+        summary["due"] = int(due["count"] if due else 0)
+        return summary
+
     def export_debug(self, org_id: str | None = None) -> dict[str, Any]:
         with self._connect() as connection:
             clause = "" if org_id is None else " WHERE org_id=?"
@@ -608,4 +623,4 @@ class MemoryStore:
             jobs = [dict(row) for row in connection.execute("SELECT * FROM scheduler_jobs" + clause, params)]
             deliveries = [dict(row) for row in connection.execute("SELECT job_id, org_id, monitor_id, url, status, attempts, max_attempts, last_status_code, last_error, created_at, updated_at, delivered_at FROM webhook_deliveries" + clause, params)]
             attempts = [dict(row) for row in connection.execute("SELECT id, job_id, org_id, attempt, delivered, status_code, error, attempted_at FROM webhook_delivery_attempts" + clause, params)]
-        return {"monitors": monitors, "snapshots": snapshots, "jobs": jobs, "webhook_deliveries": deliveries, "webhook_attempts": attempts}
+        return redact_mapping({"monitors": monitors, "snapshots": snapshots, "jobs": jobs, "webhook_deliveries": deliveries, "webhook_attempts": attempts})

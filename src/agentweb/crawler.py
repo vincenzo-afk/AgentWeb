@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import time
 import urllib.robotparser
 from urllib.error import HTTPError
 from collections import deque
@@ -11,6 +13,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 
 from .fetch import fetch_url
 from .parser import parse
+from .redaction import redact_text
 from .trust_engine import TrustEngine
 
 
@@ -38,9 +41,16 @@ class CrawlResult:
 
 
 class Crawler:
-    def __init__(self, trust_engine: TrustEngine | None = None, user_agent: str = "AgentWeb/0.2") -> None:
+    def __init__(self, trust_engine: TrustEngine | None = None, user_agent: str = "AgentWeb/0.2", rate_limit_interval: float | None = None) -> None:
         self.trust_engine = trust_engine or TrustEngine()
         self.user_agent = user_agent
+        configured_interval = os.getenv("AGENTWEB_CRAWL_MIN_INTERVAL_SECONDS", "0.1")
+        try:
+            interval = float(configured_interval) if rate_limit_interval is None else float(rate_limit_interval)
+        except (TypeError, ValueError):
+            interval = 0.1
+        self.rate_limit_interval = max(0.0, interval)
+        self._last_request_at: dict[str, float] = {}
         self._robots: dict[str, urllib.robotparser.RobotFileParser | bool] = {}
 
     def _allowed_by_robots(self, url: str) -> bool:
@@ -59,6 +69,16 @@ class Crawler:
                 self._robots[origin] = False
         parser = self._robots[origin]
         return parser if isinstance(parser, bool) else parser.can_fetch(self.user_agent, url)
+
+    def _respect_rate_limit(self, url: str) -> None:
+        if self.rate_limit_interval <= 0:
+            return
+        host = urlparse(url).netloc.lower()
+        now = time.monotonic()
+        previous = self._last_request_at.get(host)
+        if previous is not None:
+            time.sleep(max(0.0, previous + self.rate_limit_interval - now))
+        self._last_request_at[host] = time.monotonic()
 
     def crawl(
         self,
@@ -88,9 +108,10 @@ class Crawler:
             if not self._allowed_by_robots(url):
                 pages.append(CrawledPage(url, 0, False, current_depth, "blocked by robots.txt"))
                 continue
+            self._respect_rate_limit(url)
             result = fetch_url(url, trust_engine=self.trust_engine)
             if result.error:
-                pages.append(CrawledPage(url, result.status, False, current_depth, result.error))
+                pages.append(CrawledPage(url, result.status, False, current_depth, redact_text(result.error)))
                 continue
             parsed = parse(result.body.encode("utf-8"), result.content_type)
             pages.append(CrawledPage(result.url, result.status, True, current_depth))

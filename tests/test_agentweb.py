@@ -11,13 +11,14 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from agentweb.alerting import DeliveryResult, signature
 from agentweb.api import create_server
 from agentweb.auth import Authenticator, KeyStore, RateLimiter
 from agentweb.engine import AgentWebEngine
-from agentweb.errors import AuthenticationError, PermissionError
+from agentweb.errors import AuthenticationError, BrowserUnavailableError, PermissionError
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
@@ -202,6 +203,11 @@ class AgentWebTests(unittest.TestCase):
         self.assertNotIn("hidden", json.dumps(stored))
         self.assertEqual(self.engine.traces.delete("org-a", "exec-a"), 1)
         self.assertIsNone(self.engine.traces.get("exec-a", "org-a"))
+        self.store.enqueue_webhook_delivery("org-a", "mon-a", "https://example.test/hook?token=hidden", {"event": "change"})
+        debug = self.store.export_debug("org-a")
+        self.assertNotIn("hidden", json.dumps(debug))
+        self.assertGreaterEqual(self.store.queue_summary("org-a")["pending"], 1)
+        self.assertEqual(self.store.queue_summary("org-b").get("pending", 0), 0)
 
     def test_ranking_consumes_recency_and_extraction_confidence(self):
         from agentweb.models import Source
@@ -700,6 +706,30 @@ class AgentWebTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_http_error_boundary_redacts_credential_bearing_urls(self):
+        data_path = Path(self.temp_dir.name) / "error-redaction.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        key = server.authenticator.key_store.create_key("org-a", ["extract:read"])['secret']
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            body = json.dumps({"url": "https://user:secret@example.test/path"}).encode()
+            request = Request(f"http://127.0.0.1:{server.server_port}/extract", data=body, method="POST", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(request)
+            self.assertNotIn("secret", raised.exception.read().decode())
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_browser_worker_pool_rejects_capacity_overflow(self):
+        from agentweb.browser import BrowserEngine
+        browser = BrowserEngine(max_workers=1, session_timeout=0.01)
+        with browser._worker_slot():
+            with self.assertRaises(BrowserUnavailableError):
+                with browser._worker_slot():
+                    pass
 
     def test_http_scope_auth_rejects_missing_scope(self):
         os.environ["AGENTWEB_API_KEYS"] = json.dumps({"search-only": ["search:read"]})
