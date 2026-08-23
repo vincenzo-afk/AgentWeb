@@ -2,15 +2,14 @@
 
 ## Getting help
 
-- **Documentation** — start with [docs/getting-started](docs/getting-started/index.md) and the [FAQ](FAQ.md).
-- **Issues** — for bugs and feature requests, open a GitHub issue using the appropriate template in `.github/ISSUE_TEMPLATE/`.
-- **Discussions** — for open-ended questions, architecture discussion, or "how would I build X with AgentWeb," use GitHub Discussions (if enabled on the repository) or open an issue tagged as a question.
-- **Security issues** — do not file a public issue; follow [SECURITY.md](SECURITY.md).
+Start with the [README](README.md), [getting-started documentation](docs/getting-started/index.md), [FAQ](FAQ.md), and the [OpenAPI contract](openapi/openapi.yaml). For a reproducible bug, use the [bug report form](.github/ISSUE_TEMPLATE/bug_report.yml). For a scoped improvement, use the [feature request form](.github/ISSUE_TEMPLATE/feature_request.yml).
 
-## Response expectations
+When opening an issue, include the exact command or request, operating system, Python version, commit or package version, and a redacted error response. Do not include secrets, cookies, private URLs, or private fetched content.
 
-This is an early-stage, actively developed project. Response times may vary; critical bugs and security reports are prioritized.
+## Security issues
 
-## Enterprise / production support
+Do not file a public issue for a vulnerability. Follow [SECURITY.md](SECURITY.md) for the private reporting path.
 
-For teams evaluating AgentWeb for production or compliance-sensitive workloads, see [docs/guides/enterprise-rollout.md](docs/guides/enterprise-rollout.md) and [docs/security/index.md](docs/security/index.md).
+## Scope
+
+AgentWeb is an early-stage local MVP. The repository does not currently promise hosted availability, response-time commitments, recurring background monitoring, webhook delivery, or enterprise support. The [roadmap](docs/roadmap.md) records future directions.

@@ -1,28 +1,21 @@
 # Security Policy
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-If you discover a security vulnerability in AgentWeb, please report it privately rather than opening a public issue. Email the security contact listed in [SUPPORT.md](SUPPORT.md) with:
+Please do not open a public issue for a security vulnerability. Use GitHub's private vulnerability-reporting workflow from the repository **Security** tab when it is available. If that workflow is unavailable, contact the repository owner through [vincenzo-afk's GitHub profile](https://github.com/vincenzo-afk) and request a private reporting channel.
 
-- A description of the vulnerability and its potential impact
-- Steps to reproduce, including any proof-of-concept code
-- The affected component (API, browser execution layer, memory store, graph store, SDKs, etc.)
+Include a concise description, impact, reproduction steps, affected commit or file, and any safe proof of concept. Remove API keys, cookies, access tokens, private URLs, and private page contents from the report.
 
-We aim to acknowledge reports within a few business days and to provide a remediation timeline once the issue is triaged.
+## Supported versions
 
-## Supported Versions
+The current `main` branch and the latest tagged release, when one exists, are the supported targets for security fixes. Older revisions may require an upgrade before a fix can be applied.
 
-Security fixes are applied to the latest major release. Older versions may receive fixes at the maintainers' discretion depending on severity.
+## Security-sensitive areas
 
-## Scope
+The current MVP accepts arbitrary HTTP(S) URLs, reads public page content, stores normalized snapshots in SQLite, and optionally authenticates requests with a bearer token. Reviewers should pay particular attention to URL validation, response-size and timeout limits, untrusted HTML handling, secret exposure, local database permissions, and API authentication.
 
-Areas of particular sensitivity given AgentWeb's architecture:
-
-- **Browser execution layer** — sandboxing of headless browser sessions, since these execute against arbitrary third-party pages (see [docs/security/sandboxing.md](docs/security/sandboxing.md)).
-- **Credential and API key handling** — see [docs/security/secrets-management.md](docs/security/secrets-management.md).
-- **Memory and graph storage** — snapshots and extracted data may contain sensitive third-party content; see [docs/security/data-privacy.md](docs/security/data-privacy.md).
-- **Webhook delivery** for monitoring alerts — signature verification and replay protection.
+The broader architecture documents additional future areas, including browser execution, graph storage, and webhook delivery. Those components are not implemented in the current MVP and should not be treated as active attack surfaces in this version.
 
 ## Disclosure
 
-We follow coordinated disclosure. Please give us a reasonable window to fix a reported issue before any public disclosure.
+Please allow maintainers reasonable time to investigate and address a report before public disclosure. Do not test against systems or data that you do not own or have permission to access.

@@ -1,41 +1,33 @@
 # Contributing to AgentWeb
 
-Thanks for your interest in improving AgentWeb. This document covers how to propose changes, report issues, and submit code.
+Thank you for improving AgentWeb. The repository now contains a small Python 3.11+ MVP as well as the broader product and module specifications. Keep changes focused, evidence-based, and consistent with the boundary between implemented behavior and future roadmap work.
 
-## Ways to contribute
+## Before you start
 
-- **Bug reports** — use the bug report issue template and include reproduction steps.
-- **Feature proposals** — for anything beyond a small fix, open an issue first so we can discuss scope before you write code. Larger architectural proposals should follow the RFC process (see `docs/rfcs` if present, or open a discussion issue).
-- **Documentation** — fixes to `docs/`, `examples/`, or the API reference are always welcome and reviewed faster than code changes.
-- **Connectors and skills** — see [Building Connectors](docs/guides/building-connectors.md) and [Creating Skills](docs/guides/creating-skills.md).
+For a bug, use the [bug report form](.github/ISSUE_TEMPLATE/bug_report.yml). For a new capability, use the [feature request form](.github/ISSUE_TEMPLATE/feature_request.yml) and explain the smallest useful scope. Do not include API keys, cookies, private page contents, or local SQLite databases in issues or pull requests.
 
-## Development setup
+## Local development
 
-1. Fork and clone the repository.
-2. Install dependencies for the component you're working on (SDK, core services, or docs tooling).
-3. Run the relevant test suite before opening a pull request.
-4. Follow the existing code style; run any provided linters/formatters.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --editable .
+python -m compileall -q src tests
+PYTHONPATH=src python -m unittest discover -s tests -v
+```
 
-## Pull request process
+The runtime has no third-party dependencies. The test suite uses local HTTP fixtures and should not require paid services or internet access. If you add a dependency, explain why the Python standard library is insufficient and update `pyproject.toml` and the README.
 
-1. Open an issue or link to an existing one describing the motivation.
-2. Keep pull requests focused — one logical change per PR.
-3. Include tests for new behavior and update relevant docs in the same PR.
-4. Fill out the pull request template completely.
-5. A maintainer will review, request changes if needed, and merge once approved and CI passes.
+## Pull requests
 
-## Commit messages
+Use a focused branch with a descriptive name, keep one logical change per pull request, and complete the [pull-request template](.github/pull_request_template.md). Public API changes must update `openapi/openapi.yaml`, relevant schemas or docs, tests, and the README when the user workflow changes. CI must pass before merge.
 
-Use clear, imperative commit messages (e.g., "Add retry logic to browser executor" rather than "fixed stuff"). Reference the related issue number where applicable.
+## Code expectations
 
-## Code review expectations
+Prefer small standard-library components, explicit validation, deterministic tests, and clear error responses. Network-facing code must bound response sizes and timeouts, validate URLs, and avoid logging secrets. Treat fetched web content as untrusted data. Do not claim roadmap modules are implemented unless the code and tests support the claim.
 
-Reviews focus on correctness, clarity, security implications (especially around browser execution and credential handling), and alignment with the outcome-first product philosophy described in [docs/vision.md](docs/vision.md).
+Use clear, imperative commit messages. Reviewers will consider correctness, maintainability, test coverage, documentation accuracy, security implications, and compatibility with the documented API.
 
-## Reporting security issues
+## Code of Conduct and security
 
-Do not open a public issue for security vulnerabilities. Follow the process in [SECURITY.md](SECURITY.md).
-
-## Code of Conduct
-
-All contributors are expected to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
+All contributors must follow the [Code of Conduct](CODE_OF_CONDUCT.md). Do not open a public issue for a vulnerability; follow [SECURITY.md](SECURITY.md) instead.
