@@ -19,7 +19,8 @@ RELATIONAL_TABLES = {
     "api_keys": ["id", "org_id", "scope", "prefix", "hashed_secret", "created_at", "revoked_at"],
     "monitors": [
         "id", "org_id", "task", "status", "frequency", "target_url", "webhook_url", "created_at",
-        "last_checked_at", "last_change_at", "last_event", "last_error",
+        "last_checked_at", "last_change_at", "last_event", "last_error", "last_delivery_id", "last_delivery_status",
+        "last_delivery_attempts", "last_delivery_error",
     ],
     "scheduler_jobs": [
         "id", "org_id", "job_type", "monitor_id", "priority", "status", "run_at", "lease_until",
@@ -28,9 +29,11 @@ RELATIONAL_TABLES = {
     "audit_events": ["id", "org_id", "actor", "action", "target", "timestamp", "metadata"],
     "runs": ["id", "org_id", "task", "mode", "status", "created_at", "completed_at"],
     "usage_records": ["id", "org_id", "period", "mode", "count", "cost"],
+    "webhook_deliveries": ["job_id", "org_id", "monitor_id", "url", "payload_json", "status", "attempts", "max_attempts", "last_status_code", "last_error", "created_at", "updated_at", "delivered_at"],
+    "webhook_delivery_attempts": ["id", "job_id", "org_id", "attempt", "delivered", "status_code", "error", "attempted_at"],
 }
 
-_JSONB_COLUMNS = {("api_keys", "scope"), ("audit_events", "metadata")}
+_JSONB_COLUMNS = {( "api_keys", "scope"), ("audit_events", "metadata"), ("webhook_deliveries", "payload_json")}
 _REQUIRED_COLUMNS = {
     "organizations": ("id", "name"),
     "api_keys": ("id", "org_id", "scope", "prefix", "hashed_secret"),
@@ -39,10 +42,12 @@ _REQUIRED_COLUMNS = {
     "audit_events": ("id", "org_id", "actor", "action", "target", "metadata"),
     "runs": ("id", "org_id", "task", "mode", "status"),
     "usage_records": ("id", "org_id", "period", "mode"),
+    "webhook_deliveries": ("job_id", "org_id", "monitor_id", "url", "payload_json", "status"),
+    "webhook_delivery_attempts": ("id", "job_id", "org_id", "attempt", "delivered"),
 }
 _TIMESTAMP_COLUMNS = {
     "created_at", "completed_at", "last_checked_at", "last_change_at", "run_at", "lease_until",
-    "updated_at", "timestamp",
+    "updated_at", "timestamp", "delivered_at", "attempted_at",
 }
 
 

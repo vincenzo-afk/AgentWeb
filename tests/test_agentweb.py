@@ -13,9 +13,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from agentweb.alerting import signature
+from agentweb.alerting import DeliveryResult, signature
 from agentweb.api import create_server
-from agentweb.auth import Authenticator, KeyStore
+from agentweb.auth import Authenticator, KeyStore, RateLimiter
 from agentweb.engine import AgentWebEngine
 from agentweb.errors import AuthenticationError, PermissionError
 from agentweb.fetch import html_to_text
@@ -286,6 +286,66 @@ class AgentWebTests(unittest.TestCase):
             if attempt < 4:
                 self.assertEqual(status, "pending")
         self.assertEqual(self.store.get_job(job["id"])["status"], "dead_letter")
+
+    def test_webhook_delivery_is_queued_and_delivered_once(self):
+        self.engine.secret_provider = MappingSecretProvider({"WEBHOOK_SIGNING_KEY": "local-test-signing-key"}, ttl_seconds=0)
+        deliveries = []
+
+        def sender(delivery):
+            deliveries.append(delivery)
+            return DeliveryResult(True, 1, status_code=204)
+
+        self.engine.scheduler.webhook_sender = sender
+        monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly", "http://127.0.0.1:9/webhook")
+        self.engine.check_monitor(monitor)
+        FixtureHandler.body = b"<html><title>Changed</title><body>changed</body></html>"
+        changed = self.engine.check_monitor(monitor)
+        self.assertEqual(changed.last_delivery_status, "pending")
+        delivery_job = next(job for job in self.store.list_jobs("pending", "development") if job["job_type"] == "webhook_delivery")
+        check_job = next(job for job in self.store.list_jobs("pending", "development") if job["job_type"] == "monitor_check")
+        self.store.cancel_job(check_job["id"], "development")
+        result = self.engine.scheduler.run_once(time.time() + 1)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(len(deliveries), 1)
+        refreshed = self.store.get_monitor(monitor.id, "development")
+        self.assertEqual(refreshed.last_delivery_status, "delivered")
+        self.assertEqual(refreshed.last_delivery_attempts, 1)
+        self.assertEqual(self.store.get_webhook_delivery(delivery_job["id"], "development")["status"], "delivered")
+        FixtureHandler.body = b"<html><head><title>Fixture</title></head><body>restored</body></html>"
+
+    def test_webhook_delivery_failures_dead_letter_and_surface_on_poll(self):
+        self.engine.secret_provider = MappingSecretProvider({"WEBHOOK_SIGNING_KEY": "local-test-signing-key"}, ttl_seconds=0)
+        self.engine.scheduler.webhook_sender = lambda _delivery: DeliveryResult(False, 1, status_code=503, error="receiver unavailable")
+        monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly", "http://127.0.0.1:9/webhook")
+        self.engine.check_monitor(monitor)
+        FixtureHandler.body = b"<html><title>Changed</title><body>changed</body></html>"
+        self.engine.check_monitor(monitor)
+        check_job = next(job for job in self.store.list_jobs("pending", "development") if job["job_type"] == "monitor_check")
+        self.store.cancel_job(check_job["id"], "development")
+        now = time.time() + 1
+        result = None
+        for _ in range(5):
+            result = self.engine.scheduler.run_once(now)
+            now += 60
+        self.assertEqual(result["status"], "dead_letter")
+        refreshed = self.store.get_monitor(monitor.id, "development")
+        self.assertEqual(refreshed.last_delivery_status, "dead_letter")
+        self.assertEqual(refreshed.last_delivery_attempts, 5)
+        self.assertEqual(len(self.store.export_debug("development")["webhook_attempts"]), 5)
+        FixtureHandler.body = b"<html><head><title>Fixture</title></head><body>restored</body></html>"
+
+    def test_webhook_delivery_rate_limit_is_organization_scoped(self):
+        self.engine.scheduler.webhook_limiter = RateLimiter(capacity=1.0, refill_per_second=0.0)
+        delivered = []
+        self.engine.scheduler.webhook_sender = lambda delivery: delivered.append(delivery) or DeliveryResult(True, 1, status_code=204)
+        first_job = self.store.enqueue_webhook_delivery("development", "mon-first", "http://127.0.0.1:9/one", {"event": "one"})
+        second_job = self.store.enqueue_webhook_delivery("development", "mon-second", "http://127.0.0.1:9/two", {"event": "two"})
+        self.assertEqual(self.engine.scheduler.run_once(time.time() + 1)["status"], "succeeded")
+        limited = self.engine.scheduler.run_once(time.time() + 1)
+        self.assertEqual(limited["status"], "pending")
+        self.assertIn("rate", self.store.get_webhook_delivery(second_job, "development")["status"])
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(self.store.get_webhook_delivery(first_job, "development")["status"], "delivered")
 
     def test_webhook_signature_is_deterministic(self):
         body = b'{"ok":true}'

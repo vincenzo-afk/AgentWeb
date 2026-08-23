@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 import sqlite3
 import time
 import uuid
@@ -55,7 +56,11 @@ class MemoryStore:
                     last_checked_at TEXT,
                     last_change_at TEXT,
                     last_event TEXT,
-                    last_error TEXT
+                    last_error TEXT,
+                    last_delivery_id TEXT,
+                    last_delivery_status TEXT,
+                    last_delivery_attempts INTEGER NOT NULL DEFAULT 0,
+                    last_delivery_error TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_monitors_org ON monitors(org_id, status);
                 CREATE TABLE IF NOT EXISTS scheduler_jobs (
@@ -76,6 +81,35 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_org_due
                     ON scheduler_jobs(org_id, status, run_at, priority);
+                CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                    job_id TEXT PRIMARY KEY,
+                    org_id TEXT NOT NULL,
+                    monitor_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 5,
+                    last_status_code INTEGER,
+                    last_error TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    delivered_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_org_status
+                    ON webhook_deliveries(org_id, status, updated_at);
+                CREATE TABLE IF NOT EXISTS webhook_delivery_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    org_id TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    delivered INTEGER NOT NULL,
+                    status_code INTEGER,
+                    error TEXT,
+                    attempted_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_webhook_attempts_job
+                    ON webhook_delivery_attempts(job_id, attempted_at);
                 CREATE TABLE IF NOT EXISTS idempotency_records (
                     org_id TEXT NOT NULL,
                     idempotency_key TEXT NOT NULL,
@@ -105,7 +139,7 @@ class MemoryStore:
             if monitor_columns and "org_id" not in monitor_columns:
                 connection.execute("ALTER TABLE monitors ADD COLUMN org_id TEXT NOT NULL DEFAULT 'legacy'")
             monitor_columns = {row[1] for row in connection.execute("PRAGMA table_info(monitors)")}
-            for name, definition in (("webhook_url", "TEXT"), ("last_event", "TEXT")):
+            for name, definition in (("webhook_url", "TEXT"), ("last_event", "TEXT"), ("last_delivery_id", "TEXT"), ("last_delivery_status", "TEXT"), ("last_delivery_attempts", "INTEGER NOT NULL DEFAULT 0"), ("last_delivery_error", "TEXT")):
                 if name not in monitor_columns:
                     connection.execute(f"ALTER TABLE monitors ADD COLUMN {name} {definition}")
             job_columns = {row[1] for row in connection.execute("PRAGMA table_info(scheduler_jobs)")}
@@ -277,7 +311,8 @@ class MemoryStore:
     def list_monitors(self, org_id: str = "development") -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT id, org_id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, last_event, last_error "
+                "SELECT id, org_id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, last_event, last_error, "
+                "last_delivery_id, last_delivery_status, last_delivery_attempts, last_delivery_error "
                 "FROM monitors WHERE org_id=? ORDER BY id ASC",
                 (org_id,),
             ).fetchall()
@@ -287,7 +322,8 @@ class MemoryStore:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, "
-                "last_event, last_error, org_id FROM monitors WHERE id = ? AND org_id = ?",
+                "last_event, last_error, last_delivery_id, last_delivery_status, last_delivery_attempts, last_delivery_error, org_id "
+                "FROM monitors WHERE id = ? AND org_id = ?",
                 (monitor_id, org_id),
             ).fetchone()
         return Monitor(**dict(row)) if row else None
@@ -296,9 +332,12 @@ class MemoryStore:
         with self._connect() as connection:
             connection.execute(
                 "UPDATE monitors SET status=?, frequency=?, target_url=?, webhook_url=?, last_checked_at=?, "
-                "last_change_at=?, last_event=?, last_error=? WHERE id=? AND org_id=?",
+                "last_change_at=?, last_event=?, last_error=?, last_delivery_id=?, last_delivery_status=?, "
+                "last_delivery_attempts=?, last_delivery_error=? WHERE id=? AND org_id=?",
                 (monitor.status, monitor.frequency, monitor.target_url, monitor.webhook_url, monitor.last_checked_at,
-                 monitor.last_change_at, monitor.last_event, monitor.last_error, monitor.id, monitor.org_id),
+                 monitor.last_change_at, monitor.last_event, monitor.last_error, monitor.last_delivery_id,
+                 monitor.last_delivery_status, monitor.last_delivery_attempts, monitor.last_delivery_error,
+                 monitor.id, monitor.org_id),
             )
             if monitor.status != "active":
                 connection.execute(
@@ -307,8 +346,125 @@ class MemoryStore:
                     (time.time(), monitor.id, monitor.org_id),
                 )
 
+    def enqueue_webhook_delivery(
+        self,
+        org_id: str,
+        monitor_id: str,
+        url: str,
+        payload: dict[str, Any],
+        max_attempts: int = 5,
+        run_at: float | None = None,
+    ) -> str:
+        now = time.time() if run_at is None else run_at
+        job_id = "job_" + uuid.uuid4().hex[:16]
+        attempts = max(1, min(int(max_attempts), 5))
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, lease_until, "
+                "attempts, max_attempts, last_error, created_at, updated_at) VALUES(?, ?, 'webhook_delivery', NULL, 5, 'pending', ?, NULL, 0, ?, NULL, ?, ?)",
+                (job_id, org_id, run_at if run_at is not None else now, attempts, now, now),
+            )
+            connection.execute(
+                "INSERT INTO webhook_deliveries(job_id, org_id, monitor_id, url, payload_json, status, attempts, max_attempts, created_at, updated_at) "
+                "VALUES(?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)",
+                (job_id, org_id, monitor_id, url, json.dumps(payload, separators=(",", ":"), ensure_ascii=False), attempts, now, now),
+            )
+            connection.execute(
+                "UPDATE monitors SET last_delivery_id=?, last_delivery_status='pending', last_delivery_attempts=0, last_delivery_error=NULL WHERE id=? AND org_id=?",
+                (job_id, monitor_id, org_id),
+            )
+        return job_id
+
+    def get_webhook_delivery(self, job_id: str, org_id: str | None = None) -> dict[str, Any] | None:
+        query = "SELECT * FROM webhook_deliveries WHERE job_id=?"
+        params: list[Any] = [job_id]
+        if org_id is not None:
+            query += " AND org_id=?"
+            params.append(org_id)
+        with self._connect() as connection:
+            row = connection.execute(query, tuple(params)).fetchone()
+            success = connection.execute(
+                "SELECT 1 FROM webhook_delivery_attempts WHERE job_id=? AND org_id=? AND delivered=1 LIMIT 1",
+                (job_id, org_id) if org_id is not None else (job_id, row["org_id"] if row else ""),
+            ).fetchone()
+        if not row:
+            return None
+        delivery = dict(row)
+        delivery["payload"] = json.loads(delivery.pop("payload_json"))
+        delivery["already_delivered"] = bool(success)
+        return delivery
+
+    def record_webhook_attempt(
+        self,
+        job_id: str,
+        org_id: str,
+        delivered: bool,
+        status_code: int | None,
+        error: str | None,
+        attempted_at: float | None = None,
+    ) -> int:
+        attempted_at = time.time() if attempted_at is None else attempted_at
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT attempts FROM webhook_deliveries WHERE job_id=? AND org_id=?",
+                (job_id, org_id),
+            ).fetchone()
+            if not row:
+                raise ValueError("webhook delivery job not found")
+            attempt = int(row["attempts"]) + 1
+            connection.execute(
+                "INSERT INTO webhook_delivery_attempts(job_id, org_id, attempt, delivered, status_code, error, attempted_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (job_id, org_id, attempt, int(delivered), status_code, (error or "")[:500] or None, attempted_at),
+            )
+            connection.execute(
+                "UPDATE webhook_deliveries SET attempts=?, last_status_code=?, last_error=?, updated_at=? WHERE job_id=? AND org_id=?",
+                (attempt, status_code, (error or "")[:500] or None, attempted_at, job_id, org_id),
+            )
+            connection.execute(
+                "UPDATE monitors SET last_delivery_attempts=?, last_delivery_error=? WHERE last_delivery_id=? AND org_id=?",
+                (attempt, (error or "")[:500] or None, job_id, org_id),
+            )
+        return attempt
+
+    def mark_webhook_delivery(self, job_id: str, org_id: str, status: str, error: str | None = None, delivered_at: float | None = None) -> None:
+        if status not in {"pending", "retrying", "delivered", "dead_letter", "rate_limited"}:
+            raise ValueError("unsupported webhook delivery status")
+        delivered_at = time.time() if delivered_at is None else delivered_at
+        with self._connect() as connection:
+            delivery = connection.execute(
+                "SELECT monitor_id, attempts FROM webhook_deliveries WHERE job_id=? AND org_id=?",
+                (job_id, org_id),
+            ).fetchone()
+            if not delivery:
+                return
+            connection.execute(
+                "UPDATE webhook_deliveries SET status=?, last_error=?, updated_at=?, delivered_at=? WHERE job_id=? AND org_id=?",
+                (status, (error or "")[:500] or None, delivered_at, delivered_at if status == "delivered" else None, job_id, org_id),
+            )
+            connection.execute(
+                "UPDATE monitors SET last_delivery_status=?, last_delivery_error=? WHERE id=? AND org_id=?",
+                (status, (error or "")[:500] or None, delivery["monitor_id"], org_id),
+            )
+
     def delete_monitor(self, monitor_id: str, org_id: str = "development") -> bool:
         with self._connect() as connection:
+            delivery_jobs = [row[0] for row in connection.execute(
+                "SELECT job_id FROM webhook_deliveries WHERE monitor_id=? AND org_id=?", (monitor_id, org_id)
+            ).fetchall()]
+            if delivery_jobs:
+                placeholders = ",".join("?" for _ in delivery_jobs)
+                connection.execute(
+                    f"DELETE FROM webhook_delivery_attempts WHERE org_id=? AND job_id IN ({placeholders})",
+                    (org_id, *delivery_jobs),
+                )
+                connection.execute(
+                    f"DELETE FROM webhook_deliveries WHERE org_id=? AND job_id IN ({placeholders})",
+                    (org_id, *delivery_jobs),
+                )
+                connection.execute(
+                    f"DELETE FROM scheduler_jobs WHERE org_id=? AND id IN ({placeholders})",
+                    (org_id, *delivery_jobs),
+                )
             cursor = connection.execute("DELETE FROM monitors WHERE id = ? AND org_id = ?", (monitor_id, org_id))
             connection.execute("DELETE FROM scheduler_jobs WHERE monitor_id = ? AND org_id = ?", (monitor_id, org_id))
         return cursor.rowcount > 0
@@ -413,4 +569,6 @@ class MemoryStore:
             monitors = [dict(row) for row in connection.execute("SELECT * FROM monitors" + clause, params)]
             snapshots = [dict(row) for row in connection.execute("SELECT org_id, target, content_hash, captured_at FROM snapshots" + clause, params)]
             jobs = [dict(row) for row in connection.execute("SELECT * FROM scheduler_jobs" + clause, params)]
-        return {"monitors": monitors, "snapshots": snapshots, "jobs": jobs}
+            deliveries = [dict(row) for row in connection.execute("SELECT job_id, org_id, monitor_id, url, status, attempts, max_attempts, last_status_code, last_error, created_at, updated_at, delivered_at FROM webhook_deliveries" + clause, params)]
+            attempts = [dict(row) for row in connection.execute("SELECT id, job_id, org_id, attempt, delivered, status_code, error, attempted_at FROM webhook_delivery_attempts" + clause, params)]
+        return {"monitors": monitors, "snapshots": snapshots, "jobs": jobs, "webhook_deliveries": deliveries, "webhook_attempts": attempts}

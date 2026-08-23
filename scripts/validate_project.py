@@ -17,7 +17,7 @@ def main() -> None:
     missing_paths = [path for path in required_paths if path not in openapi]
     if missing_paths:
         raise SystemExit(f"OpenAPI paths missing: {', '.join(missing_paths)}")
-    for contract_marker in ["operationId: listMonitors", "operationId: getUsage", "IdempotencyKey", "Cursor", "UsageSummary", "output_format", "evidence_score", "ExtractResponse"]:
+    for contract_marker in ["operationId: listMonitors", "operationId: getUsage", "IdempotencyKey", "Cursor", "UsageSummary", "output_format", "evidence_score", "ExtractResponse", "last_delivery_status", "webhook_delivery"]:
         if contract_marker not in openapi:
             raise SystemExit(f"OpenAPI contract marker missing: {contract_marker}")
     if 'name = "agentweb"' not in pyproject or 'requires-python = ">=3.11"' not in pyproject:
@@ -42,6 +42,9 @@ def main() -> None:
     monitor_schema = json.loads((ROOT / "schemas" / "monitor.schema.json").read_text(encoding="utf-8"))
     if "org_id" not in monitor_schema.get("properties", {}):
         raise SystemExit("monitor schema is missing org_id")
+    for field in ["last_delivery_id", "last_delivery_status", "last_delivery_attempts", "last_delivery_error"]:
+        if field not in monitor_schema.get("properties", {}):
+            raise SystemExit(f"monitor schema is missing {field}")
     response_schema = json.loads((ROOT / "schemas" / "solve-response.schema.json").read_text(encoding="utf-8"))
     if "insufficient_evidence" not in response_schema.get("properties", {}):
         raise SystemExit("solve response schema is missing insufficient_evidence")

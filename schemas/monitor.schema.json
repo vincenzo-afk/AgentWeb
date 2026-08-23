@@ -12,6 +12,10 @@
     "last_checked_at": { "type": "string", "format": "date-time" },
     "last_change_at": { "type": "string", "format": "date-time" },
     "last_event": { "type": "string", "enum": ["no_change", "change_detected", "check_failed"] },
-    "last_error": { "type": "string" }
+    "last_error": { "type": "string" },
+    "last_delivery_id": { "type": "string" },
+    "last_delivery_status": { "type": "string", "enum": ["pending", "retrying", "rate_limited", "delivered", "dead_letter", "blocked"] },
+    "last_delivery_attempts": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "last_delivery_error": { "type": "string" }
   }
 }

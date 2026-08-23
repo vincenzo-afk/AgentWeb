@@ -64,8 +64,16 @@ CREATE TABLE IF NOT EXISTS monitors (
     last_checked_at TIMESTAMPTZ NULL,
     last_change_at TIMESTAMPTZ NULL,
     last_event VARCHAR(64) NULL,
-    last_error TEXT NULL
+    last_error TEXT NULL,
+    last_delivery_id VARCHAR(100) NULL,
+    last_delivery_status VARCHAR(32) NULL,
+    last_delivery_attempts INTEGER NOT NULL DEFAULT 0,
+    last_delivery_error TEXT NULL
 );
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_id VARCHAR(100) NULL;
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_status VARCHAR(32) NULL;
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_error TEXT NULL;
 CREATE TABLE IF NOT EXISTS scheduler_jobs (
     id VARCHAR(100) PRIMARY KEY,
     org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
@@ -82,6 +90,33 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(job_type, org_id, monitor_id)
 );
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    job_id VARCHAR(100) PRIMARY KEY REFERENCES scheduler_jobs(id),
+    org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
+    monitor_id VARCHAR(100) NOT NULL REFERENCES monitors(id),
+    url TEXT NOT NULL,
+    payload_json JSONB NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 5,
+    last_status_code INTEGER NULL,
+    last_error TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    delivered_at TIMESTAMPTZ NULL
+);
+CREATE TABLE IF NOT EXISTS webhook_delivery_attempts (
+    id BIGSERIAL PRIMARY KEY,
+    job_id VARCHAR(100) NOT NULL REFERENCES webhook_deliveries(job_id),
+    org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
+    attempt INTEGER NOT NULL,
+    delivered BOOLEAN NOT NULL,
+    status_code INTEGER NULL,
+    error TEXT NULL,
+    attempted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_org_status ON webhook_deliveries(org_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_webhook_attempts_job ON webhook_delivery_attempts(job_id, attempted_at);
 CREATE TABLE IF NOT EXISTS audit_events (
     id VARCHAR(100) PRIMARY KEY,
     org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),

@@ -43,7 +43,7 @@ class AgentWebEngine:
         )
         self.crawler = Crawler(self.trust_engine)
         self.browser = BrowserEngine(self.trust_engine)
-        self.scheduler = Scheduler(self.memory, self.check_monitor)
+        self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook)
 
     @staticmethod
     def _trust_score(url: str, title: str = "") -> float:
@@ -263,6 +263,10 @@ class AgentWebEngine:
         self.traces.save(monitor.id, [self._span("monitor", "create", time.time(), "complete", task, monitor.id)], org_id=org_id)
         return monitor
 
+    def _deliver_webhook(self, delivery: dict) -> object:
+        secret = self.secret_provider.get("WEBHOOK_SIGNING_KEY", required=False) or self.secret_provider.get("AGENTWEB_WEBHOOK_SIGNING_KEY", required=False) or ""
+        return send_webhook(delivery["url"], delivery["payload"], secret, max_attempts=1)
+
     def check_monitor(self, monitor: Monitor) -> Monitor:
         if monitor.status != "active":
             return monitor
@@ -308,6 +312,8 @@ class AgentWebEngine:
                 secret = self.secret_provider.get("WEBHOOK_SIGNING_KEY", required=False) or self.secret_provider.get("AGENTWEB_WEBHOOK_SIGNING_KEY", required=False) or ""
                 if not secret:
                     monitor.last_error = "webhook signing secret is not configured"
+                    monitor.last_delivery_status = "blocked"
+                    monitor.last_delivery_error = monitor.last_error
                 else:
                     payload = {
                         "event": "monitor.change_detected",
@@ -319,9 +325,12 @@ class AgentWebEngine:
                             "to_hash": self.memory.get_latest(monitor.target_url, monitor.org_id)["content_hash"],
                         },
                     }
-                    delivery = send_webhook(monitor.webhook_url, payload, secret)
-                    if not delivery.delivered:
-                        monitor.last_error = delivery.error or "webhook delivery failed"
+                    monitor.last_delivery_id = self.memory.enqueue_webhook_delivery(
+                        monitor.org_id, monitor.id, monitor.webhook_url, payload
+                    )
+                    monitor.last_delivery_status = "pending"
+                    monitor.last_delivery_attempts = 0
+                    monitor.last_delivery_error = None
         self.memory.update_monitor(monitor)
         self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_event)], org_id=monitor.org_id)
         self.memory.record_usage(monitor.org_id, "monitor_checks")

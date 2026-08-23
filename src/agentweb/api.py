@@ -56,7 +56,7 @@ def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, b
 
 
 class AgentWebHandler(BaseHTTPRequestHandler):
-    server_version = "AgentWeb/0.7.1"
+    server_version = "AgentWeb/0.8.0"
 
     @property
     def engine(self) -> AgentWebEngine:

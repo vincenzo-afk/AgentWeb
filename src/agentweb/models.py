@@ -57,6 +57,10 @@ class Monitor:
     last_change_at: str | None = None
     last_event: str | None = None
     last_error: str | None = None
+    last_delivery_id: str | None = None
+    last_delivery_status: str | None = None
+    last_delivery_attempts: int = 0
+    last_delivery_error: str | None = None
     org_id: str = "development"
 
     def to_dict(self) -> dict[str, Any]:

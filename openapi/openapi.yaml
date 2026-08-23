@@ -539,7 +539,7 @@ components:
           type: array
           items:
             type: string
-        error:
+        last_error:
           type: string
     SolveRequest:
       type: object
@@ -658,6 +658,40 @@ components:
         last_change_at:
           type: string
           format: date-time
+        last_delivery_id:
+          type: string
+        last_delivery_status:
+          type: string
+          enum: [pending, retrying, rate_limited, delivered, dead_letter, blocked]
+        last_delivery_attempts:
+          type: integer
+          minimum: 0
+          maximum: 5
+        last_delivery_error:
+          type: string
+    WebhookDelivery:
+      type: object
+      properties:
+        job_id:
+          type: string
+        job_type:
+          type: string
+          enum: [webhook_delivery]
+        monitor_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, retrying, rate_limited, delivered, dead_letter]
+        attempts:
+          type: integer
+          minimum: 0
+          maximum: 5
+        last_status_code:
+          type: integer
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
     Error:
       type: object
       properties:
