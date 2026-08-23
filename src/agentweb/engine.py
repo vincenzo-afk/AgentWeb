@@ -15,6 +15,7 @@ from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .memory import MemoryStore
 from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
+from .synthesis import synthesize
 from .parser import parse
 from .ranking import rank
 from .scheduler import Scheduler
@@ -165,7 +166,7 @@ class AgentWebEngine:
             data["confidence"] = round(sum(data["field_confidence"].values()) / len(data["field_confidence"]), 2)
         return data
 
-    def solve(self, task: str, mode: str = "focus", org_id: str = "development") -> SolveResponse:
+    def solve(self, task: str, mode: str = "focus", org_id: str = "development", output_format: str = "text") -> SolveResponse:
         task = task.strip()
         if not task or len(task) > 2000:
             raise ValueError("task must contain between 1 and 2000 characters")
@@ -212,34 +213,30 @@ class AgentWebEngine:
         ranked = rank(source_candidates, task)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
         limit = 1 if mode == "flash" else 3 if mode == "focus" else 5
-        sources = [item.source for item in ranked if item.include][:limit]
-        if sources:
-            answer = (
-                f"AgentWeb reviewed {len(sources)} source(s) for this task: {task}\n\n"
-                + "\n".join(
-                    f"{index}. {source.title or source.url} — {source.snippet[:280]}"
-                    for index, source in enumerate(sources, start=1)
-                )
+        synthesis_result = synthesize([item for item in ranked if item.include][:limit], task, output_format)
+        spans.append(
+            self._span(
+                "synthesis",
+                "synthesize",
+                time.time(),
+                "complete",
+                task,
+                f"{len(synthesis_result.citations)} citation(s); evidence={synthesis_result.evidence_score:.2f}",
             )
-            citations = [Citation(claim_span=[0, len(answer)], source_ids=[source.id for source in sources])]
-            insufficient = False
-        else:
-            answer = (
-                f"No public sources were available for this task: {task}. "
-                "Try a more specific query or provide a direct URL."
-            )
-            citations = []
-            insufficient = True
-        spans.append(self._span("synthesis", "synthesize", time.time(), "complete", task, f"{len(citations)} citation(s)"))
+        )
         self.traces.save(execution_id, spans, org_id=org_id)
         self.memory.record_usage(org_id, mode)
         return SolveResponse(
             execution_id=execution_id,
             mode=mode,
-            answer=answer,
-            sources=sources,
-            citations=citations,
-            insufficient_evidence=insufficient,
+            answer=synthesis_result.answer,
+            sources=synthesis_result.sources,
+            citations=synthesis_result.citations,
+            insufficient_evidence=synthesis_result.insufficient_evidence,
+            output_format=synthesis_result.output_format,
+            evidence_score=synthesis_result.evidence_score,
+            conflicts=synthesis_result.conflicts or [],
+            structured_output=synthesis_result.structured_output or {},
         )
 
     def create_monitor(self, task: str, frequency: str = "hourly", webhook_url: str | None = None, org_id: str = "development") -> Monitor:

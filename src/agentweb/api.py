@@ -56,7 +56,7 @@ def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, b
 
 
 class AgentWebHandler(BaseHTTPRequestHandler):
-    server_version = "AgentWeb/0.6"
+    server_version = "AgentWeb/0.7"
 
     @property
     def engine(self) -> AgentWebEngine:
@@ -308,7 +308,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             response_status = HTTPStatus.OK
             response_payload: dict | list | None
             if path == "/solve":
-                response_payload = self.engine.solve(payload.get("task", ""), payload.get("mode", "focus"), principal.org_id).to_dict()
+                response_payload = self.engine.solve(
+                    payload.get("task", ""), payload.get("mode", "focus"), principal.org_id, payload.get("output_format", "text")
+                ).to_dict()
             elif path == "/observe":
                 monitor = self.engine.create_monitor(
                     payload.get("task", ""), payload.get("frequency", "hourly"), payload.get("webhook_url"), principal.org_id

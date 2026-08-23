@@ -6,6 +6,7 @@ from .engine import AgentWebEngine
 from .scheduler import Scheduler
 from .rdbms import DatabaseConfig, PostgresRelationalStore, open_relational_store
 from .secrets import MappingSecretProvider, SecretProviderConfig, build_provider
+from .synthesis import SynthesisResult, synthesize
 
 __all__ = [
     "AgentWebEngine",
@@ -16,8 +17,10 @@ __all__ = [
     "PostgresRelationalStore",
     "Scheduler",
     "SecretProviderConfig",
+    "SynthesisResult",
     "build_provider",
     "create_server",
     "open_relational_store",
+    "synthesize",
 ]
-__version__ = "0.6.0"
+__version__ = "0.7.0"

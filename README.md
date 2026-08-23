@@ -28,7 +28,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 
 | Capability | Implementation in this repository |
 | --- | --- |
-| Grounded research | `POST /solve` accepts a task and returns an answer, sources, citations, execution ID, and timestamp. |
+| Grounded research | `POST /solve` accepts a task and returns an answer, sources, citations, execution ID, timestamp, evidence score, explicit conflicts, and selected output format. Weak evidence is marked `insufficient_evidence` instead of being fabricated. |
 | Retrieval modes | `flash`, `focus`, `dive`, and `monitor` are accepted; they control the number of returned sources. |
 | Search | `POST /search` uses a pluggable provider boundary with free DuckDuckGo fallback, optional HTTP JSON provider configuration, freshness filters, normalized published dates when supplied, and graceful provider failure. |
 | Extraction | `POST /extract` parses an HTTP(S) page and returns title, description, normalized text, links, warnings, overall confidence, field-level confidence, and optional schema-guided fields with confidence scores. |
@@ -152,7 +152,7 @@ The API returns JSON. The endpoint shapes correspond to the repository's OpenAPI
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness response. |
-| `POST` | `/solve` | Run a grounded research task. Required field: `task`; optional fields: `mode`, `skill`, `inputs`, `webhook_url`, `idempotency_key`. |
+| `POST` | `/solve` | Run a grounded research task. Required field: `task`; optional fields: `mode`, `skill`, `inputs`, `webhook_url`, `idempotency_key`, and `output_format` (`text`, `comparison`, `timeline`, or `json`). |
 | `GET` | `/observe` | List organization monitors using optional `cursor` and bounded `limit` query parameters. |
 | `POST` | `/observe` | Create a monitor. Required field: `task`; optional fields: `frequency` and `webhook_url`; supports `Idempotency-Key`. |
 | `GET` | `/observe/{id}` | Check a monitor and return its latest state. |

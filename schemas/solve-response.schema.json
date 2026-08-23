@@ -26,11 +26,25 @@
         "type": "object",
         "properties": {
           "claim_span": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
-          "source_ids": { "type": "array", "items": { "type": "string" } }
+          "source_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
         }
       }
     },
     "created_at": { "type": "string", "format": "date-time" },
-    "insufficient_evidence": { "type": "boolean" }
+    "insufficient_evidence": { "type": "boolean" },
+    "output_format": { "type": "string", "enum": ["text", "comparison", "timeline", "json"] },
+    "evidence_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "observations"],
+        "properties": {
+          "field": { "type": "string" },
+          "observations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+    "structured_output": { "type": "object" }
   }
 }

@@ -553,6 +553,10 @@ components:
           type: string
         idempotency_key:
           type: string
+        output_format:
+          type: string
+          enum: [text, comparison, timeline, json]
+          default: text
     Source:
       type: object
       properties:
@@ -601,6 +605,19 @@ components:
         created_at:
           type: string
           format: date-time
+        output_format:
+          type: string
+          enum: [text, comparison, timeline, json]
+        evidence_score:
+          type: number
+          minimum: 0
+          maximum: 1
+        conflicts:
+          type: array
+          items:
+            type: object
+        structured_output:
+          type: object
     ObserveRequest:
       type: object
       required: [task]

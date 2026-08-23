@@ -17,7 +17,7 @@ def main() -> None:
     missing_paths = [path for path in required_paths if path not in openapi]
     if missing_paths:
         raise SystemExit(f"OpenAPI paths missing: {', '.join(missing_paths)}")
-    for contract_marker in ["operationId: listMonitors", "operationId: getUsage", "IdempotencyKey", "Cursor", "UsageSummary"]:
+    for contract_marker in ["operationId: listMonitors", "operationId: getUsage", "IdempotencyKey", "Cursor", "UsageSummary", "output_format", "evidence_score", "ExtractResponse"]:
         if contract_marker not in openapi:
             raise SystemExit(f"OpenAPI contract marker missing: {contract_marker}")
     if 'name = "agentweb"' not in pyproject or 'requires-python = ">=3.11"' not in pyproject:
@@ -31,6 +31,7 @@ def main() -> None:
         "src/agentweb/secrets.py",
         "src/agentweb/rdbms.py",
         "src/agentweb/migrations.py",
+        "src/agentweb/synthesis.py",
         "spec/build-plan/SECRETS_RDBMS_DESIGN.md",
         "docs/operations/rdbms-migration.md",
     ]:
@@ -44,6 +45,9 @@ def main() -> None:
     response_schema = json.loads((ROOT / "schemas" / "solve-response.schema.json").read_text(encoding="utf-8"))
     if "insufficient_evidence" not in response_schema.get("properties", {}):
         raise SystemExit("solve response schema is missing insufficient_evidence")
+    for field in ["output_format", "evidence_score", "conflicts", "structured_output"]:
+        if field not in response_schema.get("properties", {}):
+            raise SystemExit(f"solve response schema is missing {field}")
     if 'postgres = ["psycopg[binary]>=3.1"]' not in pyproject:
         raise SystemExit("PostgreSQL optional dependency is missing")
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

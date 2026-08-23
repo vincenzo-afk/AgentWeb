@@ -36,6 +36,10 @@ class SolveResponse:
     citations: list[Citation] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now)
     insufficient_evidence: bool = False
+    output_format: str = "text"
+    evidence_score: float = 0.0
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+    structured_output: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

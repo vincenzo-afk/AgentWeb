@@ -9,6 +9,7 @@
     "skill": { "type": "string" },
     "inputs": { "type": "object" },
     "webhook_url": { "type": "string", "format": "uri" },
-    "idempotency_key": { "type": "string" }
+    "idempotency_key": { "type": "string" },
+    "output_format": { "type": "string", "enum": ["text", "comparison", "timeline", "json"], "default": "text" }
   }
 }

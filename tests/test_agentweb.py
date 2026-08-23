@@ -22,10 +22,11 @@ from agentweb.memory import MemoryStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
 from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError
 from agentweb.search import SearchProviderConfig, search
+from agentweb.synthesis import synthesize
 from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
 from agentweb.normalizer import normalize
 from agentweb.parser import parse
-from agentweb.ranking import rank
+from agentweb.ranking import RankedSource, rank
 from agentweb.trust_engine import TrustEngine
 
 
@@ -162,6 +163,43 @@ class AgentWebTests(unittest.TestCase):
         data = self.engine.extract(self.url, {"title": "string"})
         self.assertEqual(data["data"]["title"]["value"], "Fixture")
         self.assertGreaterEqual(data["data"]["title"]["confidence"], 0.8)
+
+    def test_synthesis_surfaces_conflicts_and_structured_comparison(self):
+        sources = [
+            __import__("agentweb.models", fromlist=["Source"]).Source(
+                "src-a", "https://a.example", "Retailer A", "Price $100, in stock", trust_score=0.9
+            ),
+            __import__("agentweb.models", fromlist=["Source"]).Source(
+                "src-b", "https://b.example", "Retailer B", "Price $120, out of stock", trust_score=0.8
+            ),
+        ]
+        result = synthesize(
+            [RankedSource(sources[0], 0.9), RankedSource(sources[1], 0.8)],
+            "compare prices",
+            "comparison",
+        )
+        self.assertFalse(result.insufficient_evidence)
+        self.assertEqual(result.output_format, "comparison")
+        self.assertEqual({source.id for source in result.sources if source.cited}, {"src-a", "src-b"})
+        self.assertEqual(result.citations[0].source_ids, ["src-a", "src-b"])
+        self.assertIn("price", {item["field"] for item in result.conflicts or []})
+        self.assertIn("Conflicts", result.answer)
+
+    def test_synthesis_marks_weak_evidence_insufficient(self):
+        source = __import__("agentweb.models", fromlist=["Source"]).Source(
+            "src-weak", "https://weak.example", "", "", trust_score=0.1
+        )
+        result = synthesize([RankedSource(source, 0.1, include=False)], "find evidence")
+        self.assertTrue(result.insufficient_evidence)
+        self.assertEqual(result.citations, [])
+        self.assertFalse(result.sources[0].cited)
+
+    def test_solve_supports_json_output_format(self):
+        response = self.engine.solve(f"Summarize {self.url}", mode="focus", output_format="json")
+        self.assertEqual(response.output_format, "json")
+        self.assertIsInstance(response.structured_output, dict)
+        self.assertFalse(response.insufficient_evidence)
+        self.assertTrue(response.citations)
 
     def test_solve_direct_url_returns_citation_and_trace(self):
         response = self.engine.solve(f"Summarize {self.url}", mode="focus")
