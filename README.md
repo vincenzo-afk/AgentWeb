@@ -150,7 +150,7 @@ The importer bootstraps the relational schema, validates the manifest checksums,
 
 ## HTTP API
 
-The API returns JSON. The endpoint shapes correspond to the repository's OpenAPI document.
+The API returns JSON. The canonical public URL form is `/v1/...`, matching the OpenAPI server definition. Bare paths remain available for local compatibility and return `Deprecation: true`; unsupported future major prefixes are rejected rather than routed to v1 handlers. The endpoint shapes correspond to the repository's OpenAPI document.
 
 | Method | Path | Purpose |
 | --- | --- | --- |

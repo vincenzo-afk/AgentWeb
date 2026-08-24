@@ -952,6 +952,30 @@ class AgentWebTests(unittest.TestCase):
             authenticator.authenticate("Bearer test-key", "solve:execute")
         self.assertEqual(authenticator.authenticate("Bearer test-key", "search:read").key_id, "test-key"[:8])
 
+    def test_api_v1_routes_and_legacy_deprecation_header(self):
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "versioned-api.sqlite3"))
+        thread = start_test_server(server)
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            with urlopen(Request(base + "/v1/health")) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIsNone(response.headers.get("Deprecation"))
+            with urlopen(Request(base + "/health")) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers.get("Deprecation"), "true")
+            secret = server.authenticator.key_store.create_key("org-a", ["observe:manage"])['secret']
+            with urlopen(Request(base + "/v1/observe", headers={"Authorization": "Bearer " + secret})) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIsNone(response.headers.get("Deprecation"))
+            with urlopen(Request(base + "/observe", headers={"Authorization": "Bearer " + secret})) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers.get("Deprecation"), "true")
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(base + "/v2/health", headers={"Authorization": "Bearer " + secret}))
+            self.assertEqual(raised.exception.code, 404)
+        finally:
+            stop_test_server(server, thread)
+
     def test_health_and_report_endpoints(self):
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "api.sqlite3"))
         thread = start_test_server(server)

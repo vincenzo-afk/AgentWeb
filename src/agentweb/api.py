@@ -29,6 +29,14 @@ def _request_hash(payload: dict) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def _normalize_api_path(path: str) -> tuple[str, bool]:
+    if path == "/v1":
+        return "/", True
+    if path.startswith("/v1/"):
+        return path[3:], True
+    return path, False
+
+
 def _decode_cursor(value: str) -> int:
     if not value:
         return 0
@@ -114,7 +122,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         try:
             super().handle_one_request()
         finally:
-            endpoint = urlparse(getattr(self, "path", "/unknown")).path
+            endpoint, _ = _normalize_api_path(urlparse(getattr(self, "path", "/unknown")).path)
             org_id = getattr(getattr(self, "_principal", None), "org_id", None)
             self.metrics.record_request(endpoint, time.monotonic() - started, int(getattr(self, "_last_response_status", 500)), org_id, getattr(self, "_last_error_type", None))
 
@@ -152,6 +160,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 self.send_header("Retry-After", str(int(retry_after)))
         if request_id:
             self.send_header("X-Request-ID", request_id)
+        if getattr(self, "_legacy_api_path", False):
+            self.send_header("Deprecation", "true")
         self.end_headers()
         if body:
             self.wfile.write(body)
@@ -256,7 +266,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
         parsed_url = urlparse(self.path)
-        path = parsed_url.path
+        path, versioned = _normalize_api_path(parsed_url.path)
+        self._legacy_api_path = not versioned
         query = parse_qs(parsed_url.query)
         if path == "/health":
             payload = self._health_payload()
@@ -380,7 +391,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
-        path = urlparse(self.path).path
+        path, versioned = _normalize_api_path(urlparse(self.path).path)
+        self._legacy_api_path = not versioned
         scope = "admin:*" if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/admin/browser-session-states/", "/admin/data")) else "observe:manage"
         principal = self._authenticate(scope, request_id)
         if principal is None:
@@ -450,7 +462,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
-        path = urlparse(self.path).path
+        path, versioned = _normalize_api_path(urlparse(self.path).path)
+        self._legacy_api_path = not versioned
         scope = {
             "/solve": "solve:execute",
             "/observe": "observe:manage",
