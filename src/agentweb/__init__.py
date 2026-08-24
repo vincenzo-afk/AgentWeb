@@ -18,6 +18,7 @@ from .skills import Skill, SkillRegistry, match_skill, register_skill
 from .rdbms import DatabaseConfig, PostgresDistributedQueue, PostgresRelationalStore, open_distributed_queue, open_relational_store
 from .search import JsonSearchProvider, SearchProviderConfig, SearchProviderError, build_search_provider, search
 from .secrets import MappingSecretProvider, SecretProviderConfig, build_provider
+from .structured_logging import StructuredLogger
 from .synthesis import SynthesisResult, synthesize
 from .vector_store import Match, VectorStore
 from .workflows import WorkflowStore
@@ -63,6 +64,7 @@ __all__ = [
     "SearchProviderError",
     "SecretProviderConfig",
     "SynthesisResult",
+    "StructuredLogger",
     "build_provider",
     "create_server",
     "open_distributed_queue",

@@ -23,6 +23,7 @@ from .redaction import redact_url
 from .rdbms import DatabaseConfig, open_distributed_queue
 from .search import search
 from .secrets import build_provider
+from .structured_logging import StructuredLogger
 
 
 def _request_hash(payload: dict) -> str:
@@ -290,13 +291,16 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         return {"status": "ok" if healthy else "degraded", "service": "agentweb", "checks": checks}
 
     def do_OPTIONS(self) -> None:  # noqa: N802
+        request_id = "req_" + uuid.uuid4().hex[:16]
+        self._request_id = request_id
         path, versioned = _normalize_api_path(urlparse(self.path).path)
         self._legacy_api_path = not versioned
         self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
-        self._send_json(HTTPStatus.NO_CONTENT)
+        self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
 
     def do_GET(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
+        self._request_id = request_id
         parsed_url = urlparse(self.path)
         path, versioned = _normalize_api_path(parsed_url.path)
         self._legacy_api_path = not versioned
@@ -545,6 +549,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
+        self._request_id = request_id
         path, versioned = _normalize_api_path(urlparse(self.path).path)
         self._legacy_api_path = not versioned
         self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
@@ -708,8 +713,29 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             self._error(AgentWebError("internal server error", request_id=request_id), request_id)
 
     def log_message(self, format: str, *args: object) -> None:
-        if os.getenv("AGENTWEB_QUIET") != "1":
+        if os.getenv("AGENTWEB_QUIET") == "1":
+            return
+        logger = getattr(self.server, "logger", None)
+        if not isinstance(logger, StructuredLogger):
             super().log_message(format, *args)
+            return
+        try:
+            message = format % args
+        except (TypeError, ValueError):
+            message = format
+        raw_target = str(getattr(self, "path", ""))
+        redacted_target = redact_url("http://agentweb.local" + raw_target)
+        if redacted_target.startswith("http://agentweb.local"):
+            redacted_target = redacted_target[len("http://agentweb.local") :]
+        status_code = int(getattr(self, "_last_response_status", 0) or 0)
+        level = "error" if status_code >= 500 else "warn" if status_code >= 400 else "info"
+        logger.emit(
+            level,
+            "api",
+            message,
+            request_id=getattr(self, "_request_id", None),
+            extra={"method": str(getattr(self, "command", "")), "target": redacted_target, "status_code": status_code},
+        )
 
 
 def create_server(host: str = "127.0.0.1", port: int = 8000, data_path: str = "agentweb.sqlite3"):
@@ -719,6 +745,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8000, data_path: str = "a
     store = MemoryStore(data_path)
     provider = build_provider()
     coordinator = open_distributed_queue(DatabaseConfig.from_environment(provider))
+    server.logger = StructuredLogger()  # type: ignore[attr-defined]
     server.engine = AgentWebEngine(store, secret_provider=provider, queue_coordinator=coordinator)  # type: ignore[attr-defined]
     server.queue_coordinator = coordinator  # type: ignore[attr-defined]
     server.authenticator = Authenticator(data_path, provider=provider)  # type: ignore[attr-defined]
