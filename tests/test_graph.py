@@ -45,6 +45,16 @@ class GraphStoreTests(unittest.TestCase):
         self.assertEqual({node.id for node in result.nodes}, {left.id, right.id})
         self.assertEqual(self.store.query(related_to=other.id, org_id="org_a").edges, [])
 
+    def test_bounded_multihop_query_resolves_anchor_name(self) -> None:
+        ada = self.store.upsert_entity({"type": "Person", "name": "Ada"}, "org_a")
+        project = self.store.upsert_entity({"type": "Project", "name": "Graph"}, "org_a")
+        repo = self.store.upsert_entity({"type": "Repository", "name": "AgentWeb"}, "org_a")
+        self.store.upsert_relation(ada.id, project.id, "works_on", 0.9, "org_a")
+        self.store.upsert_relation(project.id, repo.id, "contains", 0.85, "org_a")
+        result = self.store.query(related_to="Ada", org_id="org_a", depth=2)
+        self.assertEqual({edge.relation for edge in result.edges}, {"works_on", "contains"})
+        self.assertEqual({node.name for node in result.nodes}, {"Ada", "Graph", "AgentWeb"})
+
 
 class GraphApiTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -92,6 +102,11 @@ class GraphApiTests(unittest.TestCase):
 
     def test_invalid_graph_relation_is_a_client_error(self) -> None:
         status, payload, _ = self.request("POST", "/v1/graph/relations", {"from_id": "ent_missing", "to_id": "ent_other", "relation": "links"})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["type"], "invalid_request")
+
+    def test_graph_depth_is_bounded(self) -> None:
+        status, payload, _ = self.request("GET", "/v1/graph/query?depth=4")
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["type"], "invalid_request")
 

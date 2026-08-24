@@ -309,39 +309,70 @@ class GraphStore:
         relation: str | None = None,
         org_id: str = "development",
         limit: int = 100,
+        depth: int = 1,
     ) -> GraphResult:
         bounded_limit = max(1, min(int(limit), 100))
-        clauses = ["r.org_id=?"]
-        params: list[Any] = [org_id]
-        if related_to:
-            clauses.append("(r.from_id=? OR r.to_id=?)")
-            params.extend([related_to, related_to])
-        if relation:
-            clauses.append("r.relation=?")
-            params.append(relation)
-        if entity_type:
-            clauses.append("(from_node.entity_type=? OR to_node.entity_type=?)")
-            params.extend([entity_type, entity_type])
+        bounded_depth = max(1, min(int(depth), 3))
         with self._connect() as connection:
-            edge_rows = connection.execute(
-                "SELECT r.*, from_node.entity_type AS from_type, from_node.name AS from_name, to_node.entity_type AS to_type, to_node.name AS to_name "
+            all_rows = connection.execute(
+                "SELECT r.*, from_node.entity_type AS from_type, to_node.entity_type AS to_type "
                 "FROM graph_relations r JOIN graph_entities from_node ON from_node.id=r.from_id AND from_node.org_id=r.org_id "
-                "JOIN graph_entities to_node ON to_node.id=r.to_id AND to_node.org_id=r.org_id WHERE " + " AND ".join(clauses) + " ORDER BY r.updated_at DESC, r.id LIMIT ?",
-                (*params, bounded_limit),
+                "JOIN graph_entities to_node ON to_node.id=r.to_id AND to_node.org_id=r.org_id "
+                "WHERE r.org_id=? ORDER BY r.updated_at DESC, r.id",
+                (org_id,),
             ).fetchall()
+            anchor_id = None
+            if related_to:
+                anchor = connection.execute(
+                    "SELECT id FROM graph_entities WHERE org_id=? AND (id=? OR name_normalized=?) ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1",
+                    (org_id, related_to, related_to.casefold(), related_to),
+                ).fetchone()
+                anchor_id = anchor["id"] if anchor else related_to
+
+            def allowed(row: sqlite3.Row) -> bool:
+                return not relation or row["relation"] == relation
+
+            if anchor_id:
+                selected: list[sqlite3.Row] = []
+                seen_edges: set[str] = set()
+                visited = {anchor_id}
+                frontier = {anchor_id}
+                for _ in range(bounded_depth):
+                    next_frontier: set[str] = set()
+                    for row in all_rows:
+                        if not allowed(row) or row["id"] in seen_edges:
+                            continue
+                        if row["from_id"] not in frontier and row["to_id"] not in frontier:
+                            continue
+                        if entity_type and row["from_type"] != entity_type and row["to_type"] != entity_type:
+                            continue
+                        seen_edges.add(row["id"])
+                        selected.append(row)
+                        next_frontier.update({row["from_id"], row["to_id"]} - visited)
+                    visited.update(next_frontier)
+                    frontier = next_frontier
+                    if len(selected) >= bounded_limit:
+                        break
+                edge_rows = selected[:bounded_limit]
+            else:
+                edge_rows = [
+                    row for row in all_rows
+                    if allowed(row) and (not entity_type or row["from_type"] == entity_type or row["to_type"] == entity_type)
+                ][:bounded_limit]
+
             entity_ids = {row["from_id"] for row in edge_rows} | {row["to_id"] for row in edge_rows}
             entity_clauses = ["org_id=?"]
             entity_params: list[Any] = [org_id]
-            if entity_type and not entity_ids:
-                entity_clauses.append("entity_type=?")
-                entity_params.append(entity_type)
-            if related_to and not entity_ids:
-                entity_clauses.append("id=?")
-                entity_params.append(related_to)
             if entity_ids:
                 placeholders = ",".join("?" for _ in entity_ids)
                 entity_clauses.append(f"id IN ({placeholders})")
                 entity_params.extend(sorted(entity_ids))
+            elif entity_type:
+                entity_clauses.append("entity_type=?")
+                entity_params.append(entity_type)
+            elif anchor_id:
+                entity_clauses.append("id=?")
+                entity_params.append(anchor_id)
             entity_rows = connection.execute(
                 "SELECT * FROM graph_entities WHERE " + " AND ".join(entity_clauses) + " ORDER BY name COLLATE NOCASE, id LIMIT ?",
                 (*entity_params, bounded_limit),

@@ -339,12 +339,19 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 return
             if path == "/graph/query":
                 limit, _ = _page_window(query)
+                try:
+                    depth = int(query.get("depth", ["1"])[0])
+                except (TypeError, ValueError):
+                    raise InvalidRequestError("depth must be an integer between 1 and 3")
+                if depth < 1 or depth > 3:
+                    raise InvalidRequestError("depth must be an integer between 1 and 3")
                 graph_result = self.engine.graph.query(
                     entity_type=_query_value(query, "entity_type"),
                     related_to=_query_value(query, "related_to"),
                     relation=_query_value(query, "relation"),
                     org_id=principal.org_id,
                     limit=limit,
+                    depth=depth,
                 )
                 self._send_json(HTTPStatus.OK, self._decorate_success_payload(graph_result.to_dict(), request_id), request_id)
                 return

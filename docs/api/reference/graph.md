@@ -39,10 +39,10 @@ Both endpoints accept an `Idempotency-Key` header. Relation observations are mer
 ## Query the graph
 
 ```http
-GET /v1/graph/query?entity_type=Company&related_to=ent_company&relation=produces&limit=50
+GET /v1/graph/query?entity_type=Company&related_to=Acme&relation=produces&depth=2&limit=50
 ```
 
-All query parameters are optional. Results contain endpoint nodes and matching edges. Edge confidence is adjusted upward for independent source corroboration and gently discounted as an edge becomes stale; historical edges are retained rather than deleted.
+All query parameters are optional. `related_to` accepts either an entity ID or an exact case-insensitive entity name. `depth` is bounded to 1–3 hops and defaults to 1, preventing unbounded graph traversal. Results contain endpoint nodes and matching edges. Edge confidence is adjusted upward for independent source corroboration and gently discounted as an edge becomes stale; historical edges are retained rather than deleted.
 
 ```json
 {

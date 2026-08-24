@@ -392,6 +392,15 @@ paths:
           schema:
             type: string
             maxLength: 200
+        - name: depth
+          in: query
+          required: false
+          description: Maximum traversal depth, bounded to three hops.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 3
+            default: 1
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
