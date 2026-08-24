@@ -946,6 +946,21 @@ class AgentWebEngine:
                         monitor.last_delivery_status = "pending"
                         monitor.last_delivery_attempts = 0
                         monitor.last_delivery_error = None
+        else:
+            latest = self.memory.get_latest(monitor.target_url, monitor.org_id)
+            self.workflows.trigger_for_monitor(
+                monitor.id,
+                monitor.org_id,
+                "monitor.no_change",
+                {
+                    "event": "monitor.no_change",
+                    "monitor_id": monitor.id,
+                    "target": monitor.target_url,
+                    "from_hash": previous["content_hash"] if previous else "",
+                    "to_hash": latest["content_hash"] if latest else "",
+                    "timestamp": now,
+                },
+            )
         self.memory.update_monitor(monitor)
         self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, f"{monitor.last_event}; policy={change_policy_name}; snapshot_changed={snapshot_changed}")], org_id=monitor.org_id)
         self.memory.record_usage(monitor.org_id, "monitor_checks")
