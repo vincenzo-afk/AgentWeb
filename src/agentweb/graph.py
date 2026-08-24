@@ -433,6 +433,15 @@ class GraphStore:
             edges.append(Relation(**{**relation_item.__dict__, "confidence": self._query_confidence(row)}))
         return GraphResult(nodes=[self._entity(row) for row in entity_rows], edges=edges, has_more=has_more)
 
+    def delete_org(self, org_id: str) -> dict[str, int]:
+        if not isinstance(org_id, str) or not org_id.strip():
+            raise ValueError("org_id must be a non-empty string")
+        with self._connect() as connection:
+            relations = int(connection.execute("DELETE FROM graph_relations WHERE org_id=?", (org_id,)).rowcount)
+            entities = int(connection.execute("DELETE FROM graph_entities WHERE org_id=?", (org_id,)).rowcount)
+        vectors = self.vectors.delete_namespace("entities:" + org_id)
+        return {"entities": entities, "relations": relations, "vectors": vectors}
+
     def health(self) -> bool:
         try:
             with self._connect() as connection:

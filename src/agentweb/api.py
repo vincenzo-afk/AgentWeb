@@ -483,8 +483,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     return
             if path == "/admin/data":
                 kind = payload.get("kind", "snapshots")
-                if kind not in {"snapshots", "traces", "crawls", "session_states", "all"}:
-                    raise InvalidRequestError("kind must be snapshots, traces, crawls, session_states, or all")
+                if kind not in {"snapshots", "traces", "crawls", "session_states", "graph", "vectors", "learning", "workflows", "all"}:
+                    raise InvalidRequestError("kind must be snapshots, traces, crawls, session_states, graph, vectors, learning, workflows, or all")
                 target = payload.get("target")
                 if target is not None and (not isinstance(target, str) or not target.strip()):
                     raise InvalidRequestError("target must be a non-empty string when provided")
@@ -495,8 +495,14 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 deleted_traces = self.engine.traces.delete(principal.org_id, execution_id) if kind in {"traces", "all"} else 0
                 deleted_crawls = self.engine.memory.delete_crawls(principal.org_id) if kind in {"crawls", "all"} else 0
                 deleted_session_states = self.engine.session_states.delete_all(principal.org_id) if kind in {"session_states", "all"} else 0
-                self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls, "deleted_session_states": deleted_session_states})
-                response_payload = {"org_id": principal.org_id, "kind": kind, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls, "deleted_session_states": deleted_session_states}
+                graph_counts = self.engine.graph.delete_org(principal.org_id) if kind in {"graph", "all"} else {"entities": 0, "relations": 0, "vectors": 0}
+                deleted_vectors = self.engine.graph.vectors.delete_namespace("entities:" + principal.org_id) if kind == "vectors" else graph_counts["vectors"]
+                deleted_learning = self.engine.learning.delete_org(principal.org_id) if kind in {"learning", "all"} else 0
+                workflow_counts = self.engine.workflows.delete_org(principal.org_id) if kind in {"workflows", "all"} else {"workflows": 0, "runs": 0}
+                deleted_workflow_jobs = self.engine.memory.delete_scheduler_jobs(principal.org_id, "workflow_run") if kind in {"workflows", "all"} else 0
+                audit_details = {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls, "deleted_session_states": deleted_session_states, "deleted_graph_entities": graph_counts["entities"], "deleted_graph_relations": graph_counts["relations"], "deleted_vectors": deleted_vectors, "deleted_learning_outcomes": deleted_learning, "deleted_workflows": workflow_counts["workflows"], "deleted_workflow_runs": workflow_counts["runs"], "deleted_workflow_jobs": deleted_workflow_jobs}
+                self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, audit_details)
+                response_payload = {"org_id": principal.org_id, **audit_details}
                 response_payload = self._decorate_success_payload(response_payload, request_id)
                 self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.OK), response_payload)
                 self._send_json(HTTPStatus.OK, response_payload, request_id)

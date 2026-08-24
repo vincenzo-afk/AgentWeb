@@ -270,6 +270,14 @@ class WorkflowStore:
             connection.execute("UPDATE workflow_runs SET status=?, execution_id=?, error=?, completed_at=? WHERE id=? AND org_id=?", (status, execution_id, error, time.time(), run_id, org_id))
         return {"run_id": run_id, "status": status, "execution_id": execution_id}
 
+    def delete_org(self, org_id: str) -> dict[str, int]:
+        if not isinstance(org_id, str) or not org_id.strip():
+            raise ValueError("org_id must be a non-empty string")
+        with self._connect() as connection:
+            runs = int(connection.execute("DELETE FROM workflow_runs WHERE org_id=?", (org_id,)).rowcount)
+            workflows = int(connection.execute("DELETE FROM workflows WHERE org_id=?", (org_id,)).rowcount)
+        return {"workflows": workflows, "runs": runs}
+
     def health(self) -> bool:
         try:
             with self._connect() as connection:

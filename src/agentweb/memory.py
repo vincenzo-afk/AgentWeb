@@ -782,6 +782,16 @@ class MemoryStore:
             connection.execute("DELETE FROM scheduler_jobs WHERE monitor_id = ? AND org_id = ?", (monitor_id, org_id))
         return cursor.rowcount > 0
 
+    def delete_scheduler_jobs(self, org_id: str, job_type: str | None = None) -> int:
+        if not isinstance(org_id, str) or not org_id.strip():
+            raise ValueError("org_id must be a non-empty string")
+        with self._connect() as connection:
+            if job_type is None:
+                deleted = connection.execute("DELETE FROM scheduler_jobs WHERE org_id=?", (org_id,)).rowcount
+            else:
+                deleted = connection.execute("DELETE FROM scheduler_jobs WHERE org_id=? AND job_type=?", (org_id, job_type)).rowcount
+        return int(deleted)
+
     def claim_due_job(self, now: float | None = None, lease_seconds: float = 120.0, org_id: str | None = None) -> dict[str, Any] | None:
         now = time.time() if now is None else now
         with self._connect() as connection:

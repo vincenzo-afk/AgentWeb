@@ -97,6 +97,12 @@ class LearningStore:
             "created_at": now,
         }
 
+    def delete_org(self, org_id: str) -> int:
+        if not isinstance(org_id, str) or not org_id.strip():
+            raise ValueError("org_id must be a non-empty string")
+        with self._connect() as connection:
+            return int(connection.execute("DELETE FROM learning_outcomes WHERE org_id=?", (org_id,)).rowcount)
+
     def summary(self, org_id: str = "development", limit: int = 100) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 100))
         with self._connect() as connection:

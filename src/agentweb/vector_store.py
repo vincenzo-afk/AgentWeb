@@ -91,6 +91,32 @@ class VectorStore:
                 (namespace, item_id, json.dumps(vector), json.dumps(payload, sort_keys=True)),
             )
 
+    def delete_namespace(self, namespace: str) -> int:
+        namespace = str(namespace or "").strip()
+        if not namespace or len(namespace) > 80:
+            raise ValueError("namespace must contain between 1 and 80 characters")
+        if self.path is None:
+            memory = getattr(self, "_memory", {})
+            removed = [key for key in memory if key[0] == namespace]
+            for key in removed:
+                del memory[key]
+            return len(removed)
+        with self._connect() as connection:
+            return int(connection.execute("DELETE FROM vectors WHERE namespace=?", (namespace,)).rowcount)
+
+    def delete_namespace_prefix(self, prefix: str) -> int:
+        prefix = str(prefix or "").strip()
+        if not prefix or len(prefix) > 80:
+            raise ValueError("prefix must contain between 1 and 80 characters")
+        if self.path is None:
+            memory = getattr(self, "_memory", {})
+            removed = [key for key in memory if key[0].startswith(prefix)]
+            for key in removed:
+                del memory[key]
+            return len(removed)
+        with self._connect() as connection:
+            return int(connection.execute("DELETE FROM vectors WHERE namespace LIKE ?", (prefix + "%",)).rowcount)
+
     def nearest(self, vector: Vector, k: int = 10, namespace: str = "") -> list[Match]:
         if not isinstance(vector, tuple):
             vector = tuple(float(value) for value in vector)

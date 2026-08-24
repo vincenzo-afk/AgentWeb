@@ -88,7 +88,7 @@ The solve response remains an endpoint-specific standard payload with additive m
 - Extraction responses additionally expose `tables`, `entities`, and `source_spans`; source spans are local offsets into the returned title or text field.
 - Crawl responses expose a durable `crawl_id`, bounded page metadata, `pages_crawled`, and `truncated`; `GET /crawl` and `GET /crawl/{id}` return only the authenticated organization’s history.
 - Browser session-state lifecycle responses expose only opaque IDs, labels, normalized origins, timestamps, and revocation metadata. They never expose cookies, local-storage values, or session tokens.
-- `DELETE /admin/data` returns deletion counts for snapshots, crawl history, browser session states, and traces owned by the authenticated organization. It does not delete API keys, audit events, or usage records.
+- `DELETE /admin/data` returns deletion counts for snapshots, crawl history, browser session states, traces, graph entities/relations, vectors, learning outcomes, workflows, and queued workflow jobs owned by the authenticated organization. It does not delete API keys, audit events, or usage records.
 - `GET /admin/metrics` returns organization-filtered counters, observations, and gauges. Authenticated responses expose `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`; a `429` response also exposes `Retry-After`.
 
 ## Idempotent responses

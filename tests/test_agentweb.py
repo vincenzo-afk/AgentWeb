@@ -27,6 +27,7 @@ from agentweb.engine import AgentWebEngine
 from agentweb.errors import AuthenticationError, BrowserUnavailableError, InvalidRequestError, PermissionError, RateLimitError
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
+from agentweb.models import Monitor
 from agentweb.maintenance import purge_retention
 from agentweb.metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
@@ -1676,12 +1677,27 @@ class AgentWebTests(unittest.TestCase):
             self.assertIn("observations", metrics)
             trace = server.engine.solve(f"Summarize {self.url}", org_id="org-a")
             server.engine.memory.snapshot(self.url, "content", "2026-08-24T00:00:00Z", "org-a")
+            entity = server.engine.graph.upsert_entity({"type": "Company", "name": "Cleanup Co", "source_ids": ["src_cleanup"]}, "org-a")
+            server.engine.learning.record_outcome("cleanup", "focus", True, 0.9, "org-a", execution_id="exec_cleanup")
+            server.engine.memory.create_monitor(Monitor(id="monitor_cleanup", task="Watch cleanup", target_url=self.url, org_id="org-a"))
+            workflow = server.engine.workflows.create("Cleanup workflow", "monitor_cleanup", "Summarize {target}", org_id="org-a")
+            server.engine.memory.enqueue_workflow_run("org-a", "run_cleanup", workflow["id"], {"target": "https://example.com"})
             body = json.dumps({"kind": "all", "idempotency_key": "delete-1"}).encode()
             with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/data", data=body, method="DELETE", headers=headers)) as response:
                 deleted = json.loads(response.read())
             self.assertEqual(deleted["deleted_snapshots"], 2)
             self.assertEqual(deleted["deleted_traces"], 1)
+            self.assertEqual(deleted["deleted_graph_entities"], 1)
+            self.assertEqual(deleted["deleted_graph_relations"], 0)
+            self.assertGreaterEqual(deleted["deleted_vectors"], 1)
+            self.assertGreaterEqual(deleted["deleted_learning_outcomes"], 1)
+            self.assertEqual(deleted["deleted_workflows"], 1)
+            self.assertEqual(deleted["deleted_workflow_runs"], 0)
+            self.assertGreaterEqual(deleted["deleted_workflow_jobs"], 1)
             self.assertIsNone(server.engine.traces.get(trace.execution_id, "org-a"))
+            self.assertEqual(server.engine.graph.query(org_id="org-a").nodes, [])
+            self.assertEqual(server.engine.learning.summary("org-a"), [])
+            self.assertEqual(server.engine.workflows.list("org-a"), [])
         finally:
             stop_test_server(server, thread)
 

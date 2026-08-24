@@ -832,7 +832,7 @@ paths:
           $ref: '#/components/responses/Forbidden'
   /admin/data:
     delete:
-      summary: Delete organization-owned snapshots, crawl history, and execution traces
+      summary: Delete organization-owned runtime data
       operationId: deleteOrganizationData
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -845,7 +845,7 @@ paths:
               properties:
                 kind:
                   type: string
-                  enum: [snapshots, traces, crawls, session_states, all]
+                  enum: [snapshots, traces, crawls, session_states, graph, vectors, learning, workflows, all]
                   default: snapshots
                 target:
                   type: string
@@ -858,7 +858,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [org_id, kind, deleted_snapshots, deleted_traces, deleted_crawls, deleted_session_states]
+                required: [org_id, kind, deleted_snapshots, deleted_traces, deleted_crawls, deleted_session_states, deleted_graph_entities, deleted_graph_relations, deleted_vectors, deleted_learning_outcomes, deleted_workflows, deleted_workflow_runs, deleted_workflow_jobs]
                 properties:
                   org_id:
                     type: string
@@ -871,6 +871,20 @@ paths:
                   deleted_crawls:
                     type: integer
                   deleted_session_states:
+                    type: integer
+                  deleted_graph_entities:
+                    type: integer
+                  deleted_graph_relations:
+                    type: integer
+                  deleted_vectors:
+                    type: integer
+                  deleted_learning_outcomes:
+                    type: integer
+                  deleted_workflows:
+                    type: integer
+                  deleted_workflow_runs:
+                    type: integer
+                  deleted_workflow_jobs:
                     type: integer
         '400':
           $ref: '#/components/responses/BadRequest'
