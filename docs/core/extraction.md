@@ -1,6 +1,6 @@
 # Extraction
 
-The extraction layer transforms raw pages into usable structured outputs: text, metadata, tables, lists, entities, prices, dates, links, summaries, and normalized page content.
+The extraction layer transforms raw pages into usable structured outputs: text, metadata, tables, lists, entities, prices, dates, links, summaries, and normalized page content. Price normalization recognizes documented INR, USD, EUR, and GBP formats across grouped-digit and decimal-separator conventions; date normalization emits ISO values for ISO, slash/dot/hyphen, and documented English, French, Spanish, and German month-name forms. Unparseable values are retained with `normalized: false` and lower confidence rather than being dropped.
 
 ## Modes
 

@@ -205,6 +205,22 @@ class AgentWebTests(unittest.TestCase):
         self.assertGreater(price.confidence, normalize("unknown", "price").confidence)
         self.assertFalse(normalize("unknown", "price").normalized)
 
+    def test_normalizer_handles_locale_price_formats(self):
+        self.assertEqual(normalize("€1.234,56", "price").value, 1234.56)
+        self.assertEqual(normalize("1 234,50 EUR", "price").currency, "EUR")
+        self.assertEqual(normalize("1 234,50 EUR", "price").value, 1234.50)
+        self.assertEqual(normalize("(£2,000.00)", "price").value, -2000)
+        self.assertEqual(normalize("Rs 12,34,567", "price").value, 1234567)
+        self.assertEqual(normalize("USD 1,234.50", "price").currency, "USD")
+
+    def test_normalizer_handles_locale_date_formats(self):
+        self.assertEqual(normalize("31/12/2025", "date").value, "2025-12-31")
+        self.assertEqual(normalize("12/31/2025", "date").value, "2025-12-31")
+        self.assertEqual(normalize("15 août 2025", "date").value, "2025-08-15")
+        self.assertEqual(normalize("15 agosto 2025", "date").value, "2025-08-15")
+        self.assertEqual(normalize("31. März 2025", "date").value, "2025-03-31")
+        self.assertFalse(normalize("31/31/2025", "date").normalized)
+
     def test_safe_url_validation_rejects_credentials_and_redirects_are_rechecked(self):
         os.environ.pop("AGENTWEB_ALLOW_PRIVATE_TARGETS", None)
         with self.assertRaisesRegex(ValueError, "credentials"):
