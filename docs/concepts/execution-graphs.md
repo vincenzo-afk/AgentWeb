@@ -16,4 +16,6 @@ console.log(trace.actions);
 console.log(trace.sources_used);
 ```
 
-See [getting-started/debugging-basics.md](../getting-started/debugging-basics.md) for a hands-on walkthrough and [core/observability.md](../core/observability.md) for the underlying implementation.
+For a historical, read-only graph projection, call `GET /report/{execution_id}/replay`. It replays the persisted redacted record for audit inspection only: no URL is fetched, no browser session is opened, and no side effect is executed. The response exposes ordered `nodes` and `edges`, timing, sanitized summaries, and explicit execution-safety flags.
+
+See [getting-started/debugging-basics.md](../getting-started/debugging-basics.md) for a hands-on walkthrough, and [core/observability.md](../core/observability.md) for the underlying implementation.

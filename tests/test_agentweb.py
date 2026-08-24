@@ -492,6 +492,26 @@ class AgentWebTests(unittest.TestCase):
             self.assertGreaterEqual(second.purge_expired(0, now=time.time() + 1, org_id="org-a"), 2)
             self.assertNotIn("request_count{endpoint=/solve,org_id=org-a}", second.snapshot("org-a")["counters"])
 
+    def test_trace_replay_projection_is_historical_and_secret_safe(self):
+        self.engine.traces.save(
+            "exec-replay",
+            [
+                Span("planner", "plan", 1.0, 1.1, "complete", "task received", "secret=hidden"),
+                Span("browser", "open", 1.2, 1.4, "complete", "https://example.test/?token=hidden", "password=hidden"),
+            ],
+            org_id="org-a",
+        )
+        replay = self.engine.traces.replay("exec-replay", "org-a")
+        self.assertTrue(replay["replayable"])
+        self.assertTrue(replay["historical"])
+        self.assertFalse(replay["network_reexecuted"])
+        self.assertFalse(replay["side_effects"])
+        self.assertEqual([node["id"] for node in replay["nodes"]], ["step_1", "step_2"])
+        self.assertEqual(replay["edges"], [{"from": "step_1", "to": "step_2"}])
+        self.assertEqual(replay["nodes"][1]["duration_ms"], 200.0)
+        self.assertNotIn("hidden", json.dumps(replay))
+        self.assertIsNone(self.engine.traces.replay("exec-replay", "org-b"))
+
     def test_memory_reuse_retention_and_trace_deletion(self):
         from datetime import datetime, timezone
         now = 1_800_000_000.0
@@ -1176,6 +1196,29 @@ class AgentWebTests(unittest.TestCase):
             self.assertEqual(payload["checks"]["metrics"], "ok")
             self.assertEqual(payload["checks"]["audit"], "ok")
             self.assertEqual(payload["checks"]["queue"], "disabled")
+        finally:
+            stop_test_server(server, thread)
+
+    def test_report_replay_endpoint_is_versioned_and_tenant_scoped(self):
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "replay-api.sqlite3"))
+        admin_a = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
+        admin_b = server.authenticator.key_store.create_key("org-b", ["admin:*"])['secret']
+        trace = server.engine.solve(f"Summarize {self.url}", org_id="org-a")
+        thread = start_test_server(server)
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            with urlopen(Request(f"{base}/v1/report/{trace.execution_id}/replay", headers={"Authorization": "Bearer " + admin_a})) as response:
+                replay = json.loads(response.read())
+                self.assertEqual(response.headers["X-AgentWeb-API-Version"], "v1")
+            self.assertTrue(replay["replayable"])
+            self.assertFalse(replay["network_reexecuted"])
+            self.assertEqual(replay["_meta"]["path"], f"/v1/report/{trace.execution_id}/replay")
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"{base}/v1/report/{trace.execution_id}/replay", headers={"Authorization": "Bearer " + admin_b}))
+            self.assertEqual(raised.exception.code, 404)
+            error_payload = json.loads(raised.exception.read())
+            self.assertNotIn("nodes", error_payload)
+            self.assertNotIn(trace.execution_id, json.dumps(error_payload))
         finally:
             stop_test_server(server, thread)
 

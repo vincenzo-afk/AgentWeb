@@ -29,6 +29,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  /report/{execution_id}/replay:
+    get:
+      summary: Project a historical execution trace for read-only replay inspection
+      operationId: replayReport
+      parameters:
+        - name: execution_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Historical replay projection; no network or side effects are executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayResponse'
+        '404':
+          $ref: '#/components/responses/BadRequest'
   /report/{execution_id}:
     get:
       summary: Retrieve a secret-safe execution trace
@@ -1167,6 +1186,66 @@ components:
           type: array
           items:
             type: string
+    ReplayNode:
+      type: object
+      required: [id, sequence, component, operation, status, duration_ms, input_summary, output_summary]
+      properties:
+        id:
+          type: string
+        sequence:
+          type: integer
+          minimum: 1
+        component:
+          type: string
+        operation:
+          type: string
+        status:
+          type: string
+        duration_ms:
+          type: number
+          minimum: 0
+        input_summary:
+          type: string
+        output_summary:
+          type: string
+    ReplayEdge:
+      type: object
+      required: [from, to]
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+    ReplayResponse:
+      type: object
+      required: [execution_id, created_at, status, replayable, historical, network_reexecuted, side_effects, nodes, edges]
+      properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
+        execution_id:
+          type: string
+        created_at:
+          type: number
+        status:
+          type: string
+        replayable:
+          type: boolean
+        historical:
+          type: boolean
+        network_reexecuted:
+          type: boolean
+          enum: [false]
+        side_effects:
+          type: boolean
+          enum: [false]
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReplayNode'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReplayEdge'
     PlanSummary:
       type: object
       required: [id, intent, estimated_mode, steps, routed_tools]

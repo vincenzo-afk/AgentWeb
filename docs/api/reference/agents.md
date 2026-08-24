@@ -29,7 +29,11 @@ Same underlying mechanism as [`/observe`](monitor.md), usable by agents to set u
 Computes change since the last known state for a target — a thin wrapper over [`/memory/{target}/diff`](memory.md).
 
 ## `GET /report/{execution_id}`
-
 Retrieves the full [execution graph](../../concepts/execution-graphs.md) for a run.
+
+## `GET /report/{execution_id}/replay`
+
+Returns a read-only historical projection of the persisted redacted trace. The projection contains ordered nodes, edges, timing, sanitized input/output summaries, and explicit `network_reexecuted: false` and `side_effects: false` flags. It never re-fetches a URL, opens a browser, sends a webhook, mutates memory, or performs another side effect. The route uses the same organization-scoped `memory:read` authorization and nondisclosing lookup behavior as the normal report route.
+
 
 See [concepts/agents.md](../../concepts/agents.md) for the design rationale.

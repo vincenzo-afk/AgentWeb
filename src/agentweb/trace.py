@@ -69,6 +69,41 @@ class TraceStore:
                 (execution_id, org_id, time.time(), status, payload),
             )
 
+    def replay(self, execution_id: str, org_id: str = "development") -> dict | None:
+        """Return a sanitized historical execution projection; never re-execute work."""
+        trace = self.get(execution_id, org_id)
+        if not trace:
+            return None
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, str]] = []
+        for sequence, span in enumerate(trace.get("spans", []), start=1):
+            node_id = f"step_{sequence}"
+            nodes.append(
+                {
+                    "id": node_id,
+                    "sequence": sequence,
+                    "component": redact_text(str(span.get("component", ""))),
+                    "operation": redact_text(str(span.get("operation", ""))),
+                    "status": redact_text(str(span.get("status", ""))),
+                    "duration_ms": round(max(0.0, float(span.get("end_time", 0.0)) - float(span.get("start_time", 0.0))) * 1000, 2),
+                    "input_summary": redact_text(str(span.get("input_summary", ""))),
+                    "output_summary": redact_text(str(span.get("output_summary", ""))),
+                }
+            )
+            if sequence > 1:
+                edges.append({"from": f"step_{sequence - 1}", "to": node_id})
+        return {
+            "execution_id": trace["execution_id"],
+            "created_at": trace["created_at"],
+            "status": trace["status"],
+            "replayable": True,
+            "historical": True,
+            "network_reexecuted": False,
+            "side_effects": False,
+            "nodes": nodes,
+            "edges": edges,
+        }
+
     def delete(self, org_id: str, execution_id: str | None = None) -> int:
         query = "DELETE FROM execution_traces WHERE org_id=?"
         params: list[Any] = [org_id]

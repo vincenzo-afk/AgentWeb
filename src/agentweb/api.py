@@ -337,11 +337,13 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, self.engine.check_monitor(monitor).to_dict(), request_id)
                 return
             if path.startswith("/report/"):
-                execution_id = path.rsplit("/", 1)[-1]
-                trace = self.engine.traces.get(execution_id, principal.org_id)
-                if not trace:
+                report_target = path[len("/report/") :].strip("/")
+                replay = report_target.endswith("/replay")
+                execution_id = report_target[: -len("/replay")].rstrip("/") if replay else report_target
+                payload = self.engine.traces.replay(execution_id, principal.org_id) if replay else self.engine.traces.get(execution_id, principal.org_id)
+                if not payload:
                     raise NotFoundError("execution trace not found")
-                self._send_json(HTTPStatus.OK, trace, request_id)
+                self._send_json(HTTPStatus.OK, payload, request_id)
                 return
             if path.startswith("/memory/"):
                 target_part = path[len("/memory/") :]

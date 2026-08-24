@@ -172,6 +172,7 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `GET` | `/memory/{target}` | List immutable snapshots for a target. |
 | `GET` | `/memory/{target}/diff` | Compare two stored snapshots using `from` and `to` hashes. |
 | `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace belonging to the caller's organization. |
+| `GET` | `/report/{execution_id}/replay` | Retrieve an ordered, read-only historical replay projection with sanitized summaries; no network calls or side effects are performed. |
 | `GET` | `/admin/keys` | List redacted, cursor-paginated API keys for the caller's organization; requires `admin:*`. |
 | `POST` | `/admin/keys` | Create a scoped organization key; requires `admin:*`; returns the secret only once and supports `Idempotency-Key`. |
 | `DELETE` | `/admin/keys/{id}` | Revoke an organization key; requires `admin:*`; supports `Idempotency-Key`. |
