@@ -243,7 +243,7 @@ flowchart LR
     Scheduler --> Monitor
 ```
 
-The longer-term architecture adds public plan/execute APIs, connector-specific routing, graph reasoning, learning-loop persistence, and richer synthesis. Rendered browser execution, durable scheduled monitor jobs, durable crawl history, optional coordinator-backed crawl throttling, a bounded spawned browser-worker pool, encrypted origin-bound browser session state, and the internal planner/router/skills layer are implemented as local-first foundations; full relational runtime cutover remains future work.
+The current local-first architecture includes public plan/execute APIs, connector-specific routing, bounded graph reasoning, privacy-safe learning persistence, event-driven workflow runs, plugin hooks, and richer synthesis. Rendered browser execution, durable scheduled monitor jobs, durable crawl history, optional coordinator-backed crawl throttling, a bounded spawned browser-worker pool, and encrypted origin-bound browser session state are also implemented foundations. Full relational runtime cutover, calibrated evaluation, and hosted/operator integrations remain future work.
 
 ## Data and persistence
 
