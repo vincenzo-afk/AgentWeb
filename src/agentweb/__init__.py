@@ -4,7 +4,7 @@ from .api import create_server
 from .browser import BrowserEngine, BrowserSession
 from .engine import AgentWebEngine
 from .maintenance import purge_retention
-from .metrics import MetricsRegistry
+from .metrics import MetricStore, MetricsRegistry
 from .scheduler import Scheduler
 from .rdbms import DatabaseConfig, PostgresDistributedQueue, PostgresRelationalStore, open_distributed_queue, open_relational_store
 from .search import JsonSearchProvider, SearchProviderConfig, SearchProviderError, build_search_provider, search
@@ -13,6 +13,7 @@ from .synthesis import SynthesisResult, synthesize
 
 __all__ = [
     "AgentWebEngine",
+    "MetricStore",
     "MetricsRegistry",
     "purge_retention",
     "BrowserEngine",

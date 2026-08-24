@@ -75,12 +75,14 @@ CREATE TABLE IF NOT EXISTS monitors (
     last_delivery_id VARCHAR(100) NULL,
     last_delivery_status VARCHAR(32) NULL,
     last_delivery_attempts INTEGER NOT NULL DEFAULT 0,
-    last_delivery_error TEXT NULL
+    last_delivery_error TEXT NULL,
+    change_policy_json JSONB NULL
 );
 ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_id VARCHAR(100) NULL;
 ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_status VARCHAR(32) NULL;
 ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_delivery_error TEXT NULL;
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS change_policy_json JSONB NULL;
 CREATE TABLE IF NOT EXISTS scheduler_jobs (
     id VARCHAR(100) PRIMARY KEY,
     org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
@@ -469,8 +471,8 @@ class PostgresDistributedQueue(PostgresRelationalStore):
             with connection.cursor() as cursor:
                 cursor.execute("INSERT INTO organizations(id, name) VALUES(%s, %s) ON CONFLICT (id) DO NOTHING", (org_id, org_id))
                 cursor.execute(
-                    "INSERT INTO monitors(id, org_id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, last_event, last_error) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, frequency=EXCLUDED.frequency, target_url=EXCLUDED.target_url, webhook_url=EXCLUDED.webhook_url",
-                    (record.id, org_id, record.task, record.status, record.frequency, record.target_url, record.webhook_url, record.last_checked_at, record.last_change_at, record.last_event, record.last_error),
+                    "INSERT INTO monitors(id, org_id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, last_event, last_error, change_policy_json) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, frequency=EXCLUDED.frequency, target_url=EXCLUDED.target_url, webhook_url=EXCLUDED.webhook_url, change_policy_json=EXCLUDED.change_policy_json",
+                    (record.id, org_id, record.task, record.status, record.frequency, record.target_url, record.webhook_url, record.last_checked_at, record.last_change_at, record.last_event, record.last_error, json.dumps(record.change_policy) if record.change_policy else None),
                 )
 
     def enqueue_monitor_job(self, job_id: str, org_id: str, monitor_id: str, frequency: str, run_at: float | None = None) -> None:

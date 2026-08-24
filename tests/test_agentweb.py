@@ -21,6 +21,7 @@ from agentweb.engine import AgentWebEngine
 from agentweb.errors import AuthenticationError, BrowserUnavailableError, PermissionError
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
+from agentweb.metrics import MetricStore, MetricsRegistry
 from agentweb.migrations import _prepare_row, export_sqlite_relational
 from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError, POSTGRES_SCHEMA, open_distributed_queue
 from agentweb.trace import Span
@@ -190,6 +191,47 @@ class AgentWebTests(unittest.TestCase):
         ]
         self.assertEqual(rank(sources, "research task")[0].source.id, "b")
 
+    def test_nullable_monitor_policy_is_accepted_by_relational_row_preparation(self):
+        row = {
+            "id": "monitor-1",
+            "org_id": "org-a",
+            "task": "watch",
+            "status": "active",
+            "frequency": "hourly",
+            "target_url": "https://example.com",
+            "webhook_url": None,
+            "created_at": 1_800_000_000,
+            "last_checked_at": None,
+            "last_change_at": None,
+            "last_event": None,
+            "last_error": None,
+            "last_delivery_id": None,
+            "last_delivery_status": None,
+            "last_delivery_attempts": 0,
+            "last_delivery_error": None,
+            "change_policy_json": None,
+        }
+        prepared = _prepare_row("monitors", row)
+        self.assertIsNone(prepared[-1])
+
+    def test_durable_metrics_persist_filter_and_purge_by_organization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "metrics.sqlite3"
+            first = MetricsRegistry(MetricStore(path))
+            first.increment("request_count", labels={"endpoint": "/solve", "org_id": "org-a"})
+            first.increment("request_count", labels={"endpoint": "/solve", "org_id": "org-b"})
+            first.increment("process_health", labels=None)
+            first.gauge("queue_due", 3, {"org_id": "org-a"})
+            second = MetricsRegistry(MetricStore(path))
+            visible = second.snapshot("org-a")
+            self.assertIn("request_count{endpoint=/solve,org_id=org-a}", visible["counters"])
+            self.assertNotIn("request_count{endpoint=/solve,org_id=org-b}", visible["counters"])
+            self.assertNotIn("process_health", visible["counters"])
+            self.assertIn("process_health", second.snapshot()["counters"])
+            self.assertEqual(visible["gauges"]["queue_due{org_id=org-a}"], 3.0)
+            self.assertGreaterEqual(second.purge_expired(0, now=time.time() + 1, org_id="org-a"), 2)
+            self.assertNotIn("request_count{endpoint=/solve,org_id=org-a}", second.snapshot("org-a")["counters"])
+
     def test_memory_reuse_retention_and_trace_deletion(self):
         from datetime import datetime, timezone
         now = 1_800_000_000.0
@@ -309,6 +351,26 @@ class AgentWebTests(unittest.TestCase):
         self.assertIsNotNone(second.last_change_at)
         self.assertTrue(self.store.delete_monitor(monitor.id))
         FixtureHandler.body = b"<html><head><title>Fixture</title></head><body>restored</body></html>"
+
+    def test_monitor_change_policy_threshold_is_persisted_and_enforced(self):
+        FixtureHandler.body = b"<html><body>Widget price $100. Stable description.</body></html>"
+        monitor = self.engine.create_monitor(f"Watch price for {self.url}", "hourly", change_policy={"kind": "price", "absolute_delta": 5})
+        self.assertEqual(self.store.get_monitor(monitor.id, "development").change_policy["absolute_delta"], 5.0)
+        self.assertEqual(self.engine.check_monitor(monitor).last_event, "no_change")
+        FixtureHandler.body = b"<html><body>Widget price $103. Stable description.</body></html>"
+        self.assertEqual(self.engine.check_monitor(monitor).last_event, "no_change")
+        FixtureHandler.body = b"<html><body>Widget price $110. Stable description.</body></html>"
+        self.assertEqual(self.engine.check_monitor(monitor).last_event, "change_detected")
+        FixtureHandler.body = b"<html><head><title>Fixture</title></head><body>restored</body></html>"
+
+    def test_monitor_change_policy_relative_availability_and_whitespace_rules(self):
+        meaningful = self.engine._meaningful_change
+        self.assertFalse(meaningful("watch price", "Price $100", "Price $105", {"kind": "price", "relative_delta_percent": 10})[0])
+        self.assertTrue(meaningful("watch price", "Price $100", "Price $111", {"kind": "price", "relative_delta_percent": 10})[0])
+        self.assertFalse(meaningful("watch availability", "Item in stock", "Item in stock", {"kind": "availability", "required_state": "in stock"})[0])
+        self.assertTrue(meaningful("watch availability", "Item out of stock", "Item in stock", {"kind": "availability", "required_state": "in stock"})[0])
+        self.assertFalse(meaningful("watch page", "A   B", "A B", {"kind": "full_content", "ignore_whitespace": True})[0])
+        self.assertTrue(meaningful("watch page", "A B", "A C", {"kind": "full_content", "ignore_whitespace": True})[0])
 
     def test_monitor_task_aware_price_policy_ignores_irrelevant_changes(self):
         FixtureHandler.body = b"<html><body>Widget price $10. Stable description.</body></html>"
@@ -741,6 +803,28 @@ class AgentWebTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_http_admin_metrics_are_tenant_filtered(self):
+        data_path = Path(self.temp_dir.name) / "metrics-api.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin_a = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
+        server.authenticator.key_store.create_key("org-b", ["admin:*"])
+        server.engine.metrics.increment("tenant_probe", labels={"org_id": "org-a"})
+        server.engine.metrics.increment("tenant_probe", labels={"org_id": "org-b"})
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = Request(f"http://127.0.0.1:{server.server_port}/admin/metrics", headers={"Authorization": f"Bearer {admin_a}"})
+            with urlopen(request) as response:
+                metrics = json.loads(response.read())
+            self.assertIn("counters", metrics)
+            self.assertIn("observations", metrics)
+            self.assertIn("gauges", metrics)
+            self.assertIn("tenant_probe{org_id=org-a}", metrics["counters"])
+            self.assertNotIn("tenant_probe{org_id=org-b}", metrics["counters"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_http_usage_and_cursor_paginated_monitors(self):
         data_path = Path(self.temp_dir.name) / "usage.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
@@ -772,6 +856,36 @@ class AgentWebTests(unittest.TestCase):
             with self.assertRaises(Exception) as cursor_error:
                 urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe?cursor=not-valid", headers=headers))
             self.assertIn("400", str(cursor_error.exception))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_monitor_change_policy_persists_and_validates(self):
+        data_path = Path(self.temp_dir.name) / "monitor-policy.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {admin}"}
+            body = json.dumps({
+                "task": f"Watch availability for {self.url}",
+                "frequency": "daily",
+                "change_policy": {"kind": "availability", "required_state": "in stock", "ignore_whitespace": True},
+            }).encode()
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe", data=body, method="POST", headers=headers)) as response:
+                created = json.loads(response.read())
+            self.assertEqual(created["change_policy"]["kind"], "availability")
+            self.assertTrue(created["change_policy"]["ignore_whitespace"])
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe/{created['id']}", headers=headers)) as response:
+                fetched = json.loads(response.read())
+            self.assertEqual(fetched["change_policy"]["required_state"], "in stock")
+
+            for invalid_policy in ({"kind": "other"}, {"kind": "price", "absolute_delta": -1}, {"kind": "price", "relative_delta_percent": "5"}, {"kind": "availability", "required_state": "maybe"}):
+                invalid_body = json.dumps({"task": f"Watch {self.url}", "frequency": "daily", "change_policy": invalid_policy}).encode()
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe", data=invalid_body, method="POST", headers=headers))
+                self.assertEqual(raised.exception.code, 400)
         finally:
             server.shutdown()
             server.server_close()

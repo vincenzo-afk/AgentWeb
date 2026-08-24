@@ -371,7 +371,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 ).to_dict()
             elif path == "/observe":
                 monitor = self.engine.create_monitor(
-                    payload.get("task", ""), payload.get("frequency", "hourly"), payload.get("webhook_url"), principal.org_id
+                    payload.get("task", ""), payload.get("frequency", "hourly"), payload.get("webhook_url"), principal.org_id,
+                    change_policy=payload.get("change_policy"),
                 )
                 response_payload = monitor.to_dict()
             elif path == "/search":

@@ -20,7 +20,7 @@ RELATIONAL_TABLES = {
     "monitors": [
         "id", "org_id", "task", "status", "frequency", "target_url", "webhook_url", "created_at",
         "last_checked_at", "last_change_at", "last_event", "last_error", "last_delivery_id", "last_delivery_status",
-        "last_delivery_attempts", "last_delivery_error",
+        "last_delivery_attempts", "last_delivery_error", "change_policy_json",
     ],
     "scheduler_jobs": [
         "id", "org_id", "job_type", "monitor_id", "priority", "status", "run_at", "lease_until", "lease_token",
@@ -34,7 +34,7 @@ RELATIONAL_TABLES = {
     "queue_rate_limits": ["org_id", "bucket", "tokens", "capacity", "refill_per_second", "updated_at"],
 }
 
-_JSONB_COLUMNS = {( "api_keys", "scope"), ("audit_events", "metadata"), ("webhook_deliveries", "payload_json")}
+_JSONB_COLUMNS = {("api_keys", "scope"), ("audit_events", "metadata"), ("webhook_deliveries", "payload_json"), ("monitors", "change_policy_json")}
 _REQUIRED_COLUMNS = {
     "organizations": ("id", "name"),
     "api_keys": ("id", "org_id", "scope", "prefix", "hashed_secret"),
@@ -148,6 +148,8 @@ def _postgres_value(table: str, column: str, value: Any) -> Any:
         return _timestamp_value(value, required=column in {"created_at", "run_at", "updated_at", "timestamp"})
     if (table, column) in _JSONB_COLUMNS:
         if value in (None, ""):
+            if (table, column) == ("monitors", "change_policy_json"):
+                return None
             raise ValueError(f"migration row has no value for {table}.{column}")
         try:
             parsed = json.loads(value) if isinstance(value, str) else value

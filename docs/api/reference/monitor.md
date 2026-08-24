@@ -8,7 +8,11 @@ Creates a recurring monitor: AgentWeb periodically checks a target, uses the mem
 {
   "task": "Track visa slot availability and alert when a new slot appears",
   "webhook_url": "https://myapp.example.com/webhooks/agentweb",
-  "frequency": "hourly"
+  "frequency": "hourly",
+  "change_policy": {
+    "kind": "availability",
+    "required_state": "available"
+  }
 }
 ```
 
@@ -17,6 +21,7 @@ Creates a recurring monitor: AgentWeb periodically checks a target, uses the mem
 | `task` | string | yes | What to watch and what counts as a change worth alerting on |
 | `webhook_url` | string | no | Delivery target for change alerts; see [webhooks.md](../webhooks.md) |
 | `frequency` | string | no | `minutely`, `hourly`, `daily` (defaults based on task type) |
+| `change_policy` | object | no | Optional deterministic policy using `kind`, `absolute_delta`, `relative_delta_percent`, `required_state`, and `ignore_whitespace` |
 
 ## `GET /observe/{id}`
 

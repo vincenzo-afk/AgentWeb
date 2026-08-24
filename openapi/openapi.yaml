@@ -769,6 +769,27 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        change_policy:
+          $ref: '#/components/schemas/ChangePolicy'
+    ChangePolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [full_content, price, availability]
+        absolute_delta:
+          type: number
+          minimum: 0
+        relative_delta_percent:
+          type: number
+          minimum: 0
+          maximum: 10000
+        required_state:
+          type: string
+          enum: [in stock, out of stock, available, unavailable, sold out]
+        ignore_whitespace:
+          type: boolean
     Monitor:
       type: object
       required: [id, org_id, task, status, frequency, last_delivery_attempts]
@@ -790,6 +811,10 @@ components:
           nullable: true
         webhook_url:
           type: string
+          nullable: true
+        change_policy:
+          allOf:
+            - $ref: '#/components/schemas/ChangePolicy'
           nullable: true
         last_checked_at:
           type: string

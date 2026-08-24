@@ -62,7 +62,8 @@ class MemoryStore:
                     last_delivery_id TEXT,
                     last_delivery_status TEXT,
                     last_delivery_attempts INTEGER NOT NULL DEFAULT 0,
-                    last_delivery_error TEXT
+                    last_delivery_error TEXT,
+                    change_policy_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_monitors_org ON monitors(org_id, status);
                 CREATE TABLE IF NOT EXISTS scheduler_jobs (
@@ -142,7 +143,7 @@ class MemoryStore:
             if monitor_columns and "org_id" not in monitor_columns:
                 connection.execute("ALTER TABLE monitors ADD COLUMN org_id TEXT NOT NULL DEFAULT 'legacy'")
             monitor_columns = {row[1] for row in connection.execute("PRAGMA table_info(monitors)")}
-            for name, definition in (("webhook_url", "TEXT"), ("last_event", "TEXT"), ("last_delivery_id", "TEXT"), ("last_delivery_status", "TEXT"), ("last_delivery_attempts", "INTEGER NOT NULL DEFAULT 0"), ("last_delivery_error", "TEXT")):
+            for name, definition in (("webhook_url", "TEXT"), ("last_event", "TEXT"), ("last_delivery_id", "TEXT"), ("last_delivery_status", "TEXT"), ("last_delivery_attempts", "INTEGER NOT NULL DEFAULT 0"), ("last_delivery_error", "TEXT"), ("change_policy_json", "TEXT")):
                 if name not in monitor_columns:
                     connection.execute(f"ALTER TABLE monitors ADD COLUMN {name} {definition}")
             job_columns = {row[1] for row in connection.execute("PRAGMA table_info(scheduler_jobs)")}
@@ -331,6 +332,19 @@ class MemoryStore:
         return {"minutely": 60, "hourly": 3600, "daily": 86400}.get(frequency, 3600)
 
     @staticmethod
+    def _decode_monitor_row(row: Any) -> dict[str, Any]:
+        data = dict(row)
+        raw_policy = data.pop("change_policy_json", None)
+        if raw_policy:
+            try:
+                data["change_policy"] = json.loads(raw_policy)
+            except (TypeError, ValueError):
+                data["change_policy"] = None
+        else:
+            data["change_policy"] = None
+        return data
+
+    @staticmethod
     def _frequency_priority(frequency: str) -> int:
         return {"minutely": 30, "hourly": 20, "daily": 10}.get(frequency, 10)
 
@@ -339,10 +353,12 @@ class MemoryStore:
         job_id = "job_" + uuid.uuid4().hex[:16]
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO monitors(id, org_id, task, status, frequency, target_url, webhook_url, "
-                "last_checked_at, last_change_at, last_event, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                "INSERT INTO monitors(id, org_id, task, status, frequency, target_url, webhook_url, "
+                    "last_checked_at, last_change_at, last_event, last_error, change_policy_json) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (monitor.id, monitor.org_id, monitor.task, monitor.status, monitor.frequency, monitor.target_url,
-                 monitor.webhook_url, monitor.last_checked_at, monitor.last_change_at, monitor.last_event, monitor.last_error),
+                 monitor.webhook_url, monitor.last_checked_at, monitor.last_change_at, monitor.last_event, monitor.last_error,
+                 json.dumps(monitor.change_policy, separators=(",", ":"), ensure_ascii=False) if monitor.change_policy else None),
+
             )
             connection.execute(
                 "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, lease_until, "
@@ -355,32 +371,34 @@ class MemoryStore:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT id, org_id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, last_event, last_error, "
-                "last_delivery_id, last_delivery_status, last_delivery_attempts, last_delivery_error "
+                "last_delivery_id, last_delivery_status, last_delivery_attempts, last_delivery_error, change_policy_json "
                 "FROM monitors WHERE org_id=? ORDER BY id ASC",
                 (org_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._decode_monitor_row(row) for row in rows]
 
     def get_monitor(self, monitor_id: str, org_id: str = "development") -> Monitor | None:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, "
-                "last_event, last_error, last_delivery_id, last_delivery_status, last_delivery_attempts, last_delivery_error, org_id "
+                "last_event, last_error, last_delivery_id, last_delivery_status, last_delivery_attempts, last_delivery_error, change_policy_json, org_id "
                 "FROM monitors WHERE id = ? AND org_id = ?",
                 (monitor_id, org_id),
             ).fetchone()
-        return Monitor(**dict(row)) if row else None
+        return Monitor(**self._decode_monitor_row(row)) if row else None
 
     def update_monitor(self, monitor: Monitor) -> None:
         with self._connect() as connection:
             connection.execute(
-                "UPDATE monitors SET status=?, frequency=?, target_url=?, webhook_url=?, last_checked_at=?, "
-                "last_change_at=?, last_event=?, last_error=?, last_delivery_id=?, last_delivery_status=?, "
-                "last_delivery_attempts=?, last_delivery_error=? WHERE id=? AND org_id=?",
+                                "UPDATE monitors SET status=?, frequency=?, target_url=?, webhook_url=?, last_checked_at=?, "
+                    "last_change_at=?, last_event=?, last_error=?, last_delivery_id=?, last_delivery_status=?, "
+                    "last_delivery_attempts=?, last_delivery_error=?, change_policy_json=? WHERE id=? AND org_id=?",
                 (monitor.status, monitor.frequency, monitor.target_url, monitor.webhook_url, monitor.last_checked_at,
                  monitor.last_change_at, monitor.last_event, monitor.last_error, monitor.last_delivery_id,
                  monitor.last_delivery_status, monitor.last_delivery_attempts, monitor.last_delivery_error,
+                 json.dumps(monitor.change_policy, separators=(",", ":"), ensure_ascii=False) if monitor.change_policy else None,
                  monitor.id, monitor.org_id),
+
             )
             if monitor.status != "active":
                 connection.execute(

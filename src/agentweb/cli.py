@@ -44,11 +44,12 @@ def _gc_main(argv: list[str]) -> None:
     parser.add_argument("--data", default="agentweb.sqlite3", help="SQLite database path.")
     parser.add_argument("--snapshot-days", type=int, default=90, help="Snapshot retention window.")
     parser.add_argument("--trace-days", type=int, default=30, help="Trace retention window.")
+    parser.add_argument("--metric-days", type=int, default=30, help="Metric retention window.")
     parser.add_argument("--org", default=None, help="Limit cleanup to one organization.")
     args = parser.parse_args(argv[1:])
     memory = MemoryStore(args.data)
     engine = AgentWebEngine(memory)
-    print(json.dumps(purge_retention(memory, engine.traces, snapshot_retention_days=args.snapshot_days, trace_retention_days=args.trace_days, org_id=args.org), indent=2))
+    print(json.dumps(purge_retention(memory, engine.traces, snapshot_retention_days=args.snapshot_days, trace_retention_days=args.trace_days, metric_retention_days=args.metric_days, org_id=args.org, metrics=engine.metrics), indent=2))
 
 
 def main() -> None:

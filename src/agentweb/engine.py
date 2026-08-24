@@ -13,7 +13,7 @@ from .browser import BrowserEngine
 from .crawler import Crawler
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .memory import MemoryStore
-from .metrics import MetricsRegistry
+from .metrics import MetricStore, MetricsRegistry
 from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .synthesis import synthesize
@@ -38,7 +38,7 @@ class AgentWebEngine:
         queue_coordinator: object | None = None,
     ) -> None:
         self.memory = memory or MemoryStore()
-        self.metrics = MetricsRegistry()
+        self.metrics = MetricsRegistry(MetricStore(self.memory.path))
         self.secret_provider = secret_provider or build_provider()
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
         self.queue_coordinator = queue_coordinator
@@ -301,13 +301,14 @@ class AgentWebEngine:
             structured_output=synthesis_result.structured_output or {},
         )
 
-    def create_monitor(self, task: str, frequency: str = "hourly", webhook_url: str | None = None, org_id: str = "development") -> Monitor:
+    def create_monitor(self, task: str, frequency: str = "hourly", webhook_url: str | None = None, org_id: str = "development", change_policy: dict | None = None) -> Monitor:
         task = task.strip()
         if not task or len(task) > 2000:
             raise ValueError("task must contain between 1 and 2000 characters")
         if frequency not in {"minutely", "hourly", "daily"}:
             raise ValueError("frequency must be one of: minutely, hourly, daily")
         target_url = next(iter(URL_RE.findall(task)), None)
+        normalized_policy = self._validate_change_policy(change_policy)
         if webhook_url:
             validate_url(webhook_url)
             webhook_decision = self.trust_engine.should_fetch(webhook_url)
@@ -319,6 +320,7 @@ class AgentWebEngine:
             frequency=frequency,
             target_url=target_url,
             webhook_url=webhook_url,
+            change_policy=normalized_policy,
             org_id=org_id,
         )
         local_job_id = self.memory.create_monitor(monitor)
@@ -341,22 +343,73 @@ class AgentWebEngine:
         return send_webhook(destination, delivery["payload"], secret, max_attempts=1)
 
     @staticmethod
-    def _meaningful_change(task: str, previous: str | None, current: str) -> tuple[bool, str]:
+    def _validate_change_policy(policy: dict | None) -> dict | None:
+        if policy is None:
+            return None
+        if not isinstance(policy, dict):
+            raise ValueError("change_policy must be an object")
+        allowed = {"kind", "absolute_delta", "relative_delta_percent", "required_state", "ignore_whitespace"}
+        unknown = set(policy) - allowed
+        if unknown:
+            raise ValueError(f"unsupported change_policy field: {sorted(unknown)[0]}")
+        normalized = dict(policy)
+        if "kind" in normalized and normalized["kind"] not in {"full_content", "price", "availability"}:
+            raise ValueError("change_policy.kind must be full_content, price, or availability")
+        for name in ("absolute_delta", "relative_delta_percent"):
+            if name in normalized:
+                value = normalized[name]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                    raise ValueError(f"change_policy.{name} must be a non-negative number")
+                normalized[name] = float(value)
+        if normalized.get("relative_delta_percent", 0) > 10000:
+            raise ValueError("change_policy.relative_delta_percent is too large")
+        if "required_state" in normalized:
+            state = str(normalized["required_state"]).strip().lower()
+            if state not in {"in stock", "out of stock", "available", "unavailable", "sold out"}:
+                raise ValueError("change_policy.required_state is not supported")
+            normalized["required_state"] = state
+        if "ignore_whitespace" in normalized and not isinstance(normalized["ignore_whitespace"], bool):
+            raise ValueError("change_policy.ignore_whitespace must be boolean")
+        return normalized or None
+
+    @staticmethod
+    def _meaningful_change(task: str, previous: str | None, current: str, policy: dict | None = None) -> tuple[bool, str]:
         if previous is None:
             return False, "initial_snapshot"
+        policy = policy or {}
         lowered = task.lower()
-        if any(term in lowered for term in ("price", "cost", "sale")):
+        kind = policy.get("kind")
+        if kind is None:
+            kind = "price" if any(term in lowered for term in ("price", "cost", "sale")) else "availability" if any(term in lowered for term in ("availability", "available", "stock", "sold out")) else "full_content"
+        if kind == "price":
             pattern = r"(?:₹|\$|€|£)\s?\d[\d,]*(?:\.\d+)?"
-            before = re.findall(pattern, previous)
-            after = re.findall(pattern, current)
+            parse_price = lambda value: [float(item.replace(",", "").replace("₹", "").replace("$", "").replace("€", "").replace("£", "").strip()) for item in re.findall(pattern, value)]
+            before, after = parse_price(previous), parse_price(current)
             if before or after:
-                return before != after, "price"
-        if any(term in lowered for term in ("availability", "available", "stock", "sold out")):
+                if len(before) != len(after):
+                    return True, "price"
+                differences = [abs(left - right) for left, right in zip(before, after)]
+                absolute = policy.get("absolute_delta")
+                relative = policy.get("relative_delta_percent")
+                if absolute is not None and any(delta > 0 and delta >= absolute for delta in differences):
+                    return True, "price"
+                if relative is not None and any(delta > 0 and ((abs(left) == 0) or (abs(left) > 0 and delta / abs(left) * 100 >= relative)) for left, delta in zip(before, differences)):
+                    return True, "price"
+                if absolute is None and relative is None:
+                    return before != after, "price"
+                return False, "price_threshold"
+        if kind == "availability":
             pattern = r"\b(?:in stock|out of stock|available|unavailable|sold out)\b"
-            before = [item.lower() for item in re.findall(pattern, previous, re.IGNORECASE)]
-            after = [item.lower() for item in re.findall(pattern, current, re.IGNORECASE)]
+            before = {item.lower() for item in re.findall(pattern, previous, re.IGNORECASE)}
+            after = {item.lower() for item in re.findall(pattern, current, re.IGNORECASE)}
+            required = policy.get("required_state")
+            if required:
+                return required in after and required not in before, "availability_target"
             if before or after:
                 return before != after, "availability"
+        if policy.get("ignore_whitespace"):
+            normalize_text = lambda value: re.sub(r"\s+", " ", value).strip()
+            return normalize_text(previous) != normalize_text(current), "full_content"
         return previous != current, "full_content"
 
     def check_monitor(self, monitor: Monitor) -> Monitor:
@@ -397,7 +450,7 @@ class AgentWebEngine:
             captured_at=now,
             org_id=monitor.org_id,
         )
-        changed, change_policy = self._meaningful_change(monitor.task, previous["content"] if previous else None, content)
+        changed, change_policy_name = self._meaningful_change(monitor.task, previous["content"] if previous else None, content, monitor.change_policy)
         monitor.last_event = "change_detected" if changed else "no_change"
         if changed:
             monitor.last_change_at = now
@@ -441,6 +494,6 @@ class AgentWebEngine:
                         monitor.last_delivery_attempts = 0
                         monitor.last_delivery_error = None
         self.memory.update_monitor(monitor)
-        self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, f"{monitor.last_event}; policy={change_policy}; snapshot_changed={snapshot_changed}")], org_id=monitor.org_id)
+        self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, f"{monitor.last_event}; policy={change_policy_name}; snapshot_changed={snapshot_changed}")], org_id=monitor.org_id)
         self.memory.record_usage(monitor.org_id, "monitor_checks")
         return monitor
