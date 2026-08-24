@@ -4,6 +4,8 @@ Base URL: `https://api.agentweb.dev/v1`
 
 | Method | Path | Description |
 |---|---|---|
+| POST | `/plan` | Create a tenant-scoped expiring plan without executing it |
+| POST | `/execute` | Execute a previously inspected plan; supports idempotency |
 | POST | `/solve` | Run a one-shot grounded research task |
 | GET | `/observe` | List organization monitors with cursor pagination |
 | POST | `/observe` | Create a recurring monitor; supports idempotency |
@@ -34,4 +36,4 @@ Base URL: `https://api.agentweb.dev/v1`
 
 List endpoints use the opaque `cursor` and bounded `limit` query parameters described in [pagination.md](pagination.md). Full request/response schemas are in [reference/](reference/search.md).
 
-The following roadmap capabilities are intentionally not exposed by the current API: `GET /graph/query`, `POST /plan`, and `POST /execute`. They remain gated by the Phase 2 and Phase 3 roadmap decisions.
+The following roadmap capability remains intentionally unexposed by the current API: `GET /graph/query`. Graph query execution remains gated by the Phase 2 roadmap decision. The plan/execute pair is now available as a bounded local-first agent workflow; it does not introduce graph reasoning, intervention, or learning-loop persistence.

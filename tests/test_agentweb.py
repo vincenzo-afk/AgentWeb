@@ -330,6 +330,35 @@ class AgentWebTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "browser session state not found"):
             self.engine.solve(f"Render and summarize {self.url}", inputs={"session_state_id": "bstate_missing"})
 
+    def test_plan_store_is_tenant_scoped_bounded_and_expiring(self):
+        from agentweb.planner import PlanStore, Planner
+
+        now = [100.0]
+        store = PlanStore(ttl_seconds=10, max_plans=1, clock=lambda: now[0])
+        first = Planner().plan("Find a product")
+        second = Planner().plan("Find another product")
+        store.put("org-a", first, "Find a product", {"safe": True})
+        self.assertIsNotNone(store.get("org-a", first.id))
+        self.assertIsNone(store.get("org-b", first.id))
+        store.put("org-a", second, "Find another product", {})
+        self.assertIsNone(store.get("org-a", first.id))
+        self.assertEqual(store.size(), 1)
+        now[0] += 11
+        self.assertIsNone(store.get("org-a", second.id))
+        self.assertEqual(store.size(), 0)
+
+    def test_engine_plan_and_execute_reuse_approved_plan(self):
+        created = self.engine.create_plan(f"Summarize {self.url}", mode="focus", org_id="org-a")
+        self.assertTrue(created["plan_id"].startswith("plan_"))
+        self.assertTrue(created["reusable"])
+        self.assertNotIn("task", json.dumps(created["plan"]))
+        result = self.engine.execute_plan(created["plan_id"], org_id="org-a")
+        self.assertEqual(result["plan_id"], created["plan_id"])
+        self.assertEqual(result["plan"]["id"], created["plan_id"])
+        self.assertTrue(result["sources"])
+        with self.assertRaisesRegex(ValueError, "plan not found or expired"):
+            self.engine.execute_plan(created["plan_id"], org_id="org-b")
+
     def test_planner_matches_skills_and_estimates_modes(self):
         from agentweb.planner import Planner
 
@@ -1150,6 +1179,49 @@ class AgentWebTests(unittest.TestCase):
             self.assertEqual(monitor["_meta"]["api_version"], "v1")
             self.assertEqual(monitor["_meta"]["path"], "/v1/observe")
             self.assertFalse(monitor["_meta"]["deprecated"])
+        finally:
+            stop_test_server(server, thread)
+
+    def test_agent_plan_and_execute_routes_are_scoped_and_idempotent(self):
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "agent-api.sqlite3"))
+        key_a = server.authenticator.key_store.create_key("org-a", ["solve:execute"])['secret']
+        key_b = server.authenticator.key_store.create_key("org-b", ["solve:execute"])['secret']
+        thread = start_test_server(server)
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            plan_request = Request(
+                f"{base}/v1/plan",
+                data=json.dumps({"task": f"Summarize {self.url}", "mode": "focus"}).encode(),
+                method="POST",
+                headers={"Authorization": "Bearer " + key_a, "Content-Type": "application/json"},
+            )
+            with urlopen(plan_request) as response:
+                plan_payload = json.loads(response.read())
+            self.assertTrue(plan_payload["plan_id"].startswith("plan_"))
+            self.assertTrue(plan_payload["reusable"])
+            self.assertNotIn("execution_id", plan_payload)
+            self.assertNotIn("sources", plan_payload)
+            self.assertNotIn("task", json.dumps(plan_payload["plan"]))
+            self.assertEqual(plan_payload["_meta"]["path"], "/v1/plan")
+
+            execute_body = {"plan_id": plan_payload["plan_id"], "idempotency_key": "execute-plan-1"}
+            execute_headers = {"Authorization": "Bearer " + key_a, "Content-Type": "application/json"}
+            with urlopen(Request(f"{base}/v1/execute", data=json.dumps(execute_body).encode(), method="POST", headers=execute_headers)) as response:
+                first = json.loads(response.read())
+            with urlopen(Request(f"{base}/v1/execute", data=json.dumps(execute_body).encode(), method="POST", headers=execute_headers)) as response:
+                replay = json.loads(response.read())
+            self.assertEqual(first["plan_id"], plan_payload["plan_id"])
+            self.assertEqual(first["execution_id"], replay["execution_id"])
+            self.assertNotEqual(first["_meta"]["request_id"], replay["_meta"]["request_id"])
+            self.assertEqual(replay["_meta"]["path"], "/v1/execute")
+
+            cross_body = json.dumps({"plan_id": plan_payload["plan_id"]}).encode()
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"{base}/v1/execute", data=cross_body, method="POST", headers={"Authorization": "Bearer " + key_b, "Content-Type": "application/json"}))
+            self.assertEqual(raised.exception.code, 400)
+            cross_error = json.loads(raised.exception.read())
+            self.assertNotIn("plan_id", cross_error)
+            self.assertNotIn(plan_payload["plan_id"], json.dumps(cross_error))
         finally:
             stop_test_server(server, thread)
 

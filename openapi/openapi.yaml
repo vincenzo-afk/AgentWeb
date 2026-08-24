@@ -103,6 +103,42 @@ paths:
           description: Snapshot diff
         '404':
           $ref: '#/components/responses/BadRequest'
+  /plan:
+    post:
+      summary: Create an inspectable plan without executing it
+      operationId: createPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanRequest'
+      responses:
+        '200':
+          description: Tenant-scoped expiring plan; task text is not returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+  /execute:
+    post:
+      summary: Execute a previously approved plan
+      operationId: executePlan
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+      responses:
+        '200':
+          description: Grounded solve response produced from the approved plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SolveResponse'
   /solve:
     post:
       summary: Run a one-shot grounded research/synthesis task
@@ -1130,6 +1166,48 @@ components:
           type: string
           enum: [text, comparison, timeline, json]
           default: text
+    PlanRequest:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        mode:
+          $ref: '#/components/schemas/Mode'
+        skill:
+          type: string
+        inputs:
+          type: object
+          description: Optional bounded browser actions and opaque credential/session-state references.
+    ExecuteRequest:
+      type: object
+      required: [plan_id]
+      properties:
+        plan_id:
+          type: string
+        output_format:
+          type: string
+          enum: [text, comparison, timeline, json]
+        idempotency_key:
+          type: string
+    PlanResponse:
+      type: object
+      required: [plan_id, plan, created_at, expires_at, reusable]
+      properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
+        plan_id:
+          type: string
+        plan:
+          $ref: '#/components/schemas/PlanSummary'
+        created_at:
+          type: number
+        expires_at:
+          type: number
+        reusable:
+          type: boolean
     Source:
       type: object
       required: [id, url, title, snippet, trust_score, cited]

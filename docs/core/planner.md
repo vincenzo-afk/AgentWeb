@@ -17,11 +17,11 @@ A **plan**: an ordered set of serializable `PlanStep` objects to hand to the [Ro
 - Classify task intent (lookup, comparison, monitoring, longitudinal tracking, etc.)
 - Decide depth (how many sources, how much browsing vs. static search)
 - Decide whether a matching Internet Skill template applies
-- Produce a plan inspectable through the Python `Planner.plan()` contract and used internally by `/solve`; the public `/plan` and `/execute` endpoints remain deferred (see [api/reference/agents.md](../api/reference/agents.md))
+- Produce a plan inspectable through the Python `Planner.plan()` contract, exposed through the authenticated `/plan` endpoint, and reused by `/execute` after approval (see [api/reference/agents.md](../api/reference/agents.md))
 
 ## Current local implementation
 
-The local MVP provides deterministic `Planner`, `Plan`, and `PlanStep` objects. Built-in matching currently covers comparison, current price/availability lookup, and source-summary tasks. An explicitly named unknown skill fails closed with a validation error; an unmatched task falls back to a conservative focus-style search, extraction, ranking, and synthesis plan. When a task includes an absolute URL and explicitly requests rendering or interaction, the planner changes the bounded URL step to `browser`; ordinary tasks continue to prefer static extraction.
+The local MVP provides deterministic `Planner`, `Plan`, `PlanStep`, and expiring `PlanStore` objects. Built-in matching currently covers comparison, current price/availability lookup, and source-summary tasks. An explicitly named unknown skill fails closed with a validation error; an unmatched task falls back to a conservative focus-style search, extraction, ranking, and synthesis plan. When a task includes an absolute URL and explicitly requests rendering or interaction, the planner changes the bounded URL step to `browser`; ordinary tasks continue to prefer static extraction. `POST /plan` stores the approved candidate by organization for 15 minutes, while `POST /execute` reuses that exact plan instead of silently replanning.
 
 ## Learning loop
 

@@ -494,6 +494,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
         scope = {
             "/solve": "solve:execute",
+            "/plan": "solve:execute",
+            "/execute": "solve:execute",
             "/observe": "observe:manage",
             "/search": "search:read",
             "/extract": "extract:read",
@@ -513,13 +515,27 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json()
-            if path in {"/solve", "/observe", "/crawl", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
+            if path in {"/solve", "/execute", "/observe", "/crawl", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
             response_status = HTTPStatus.OK
             response_payload: dict | list | None
-            if path == "/solve":
+            if path == "/plan":
+                response_payload = self.engine.create_plan(
+                    payload.get("task", ""),
+                    payload.get("mode"),
+                    principal.org_id,
+                    payload.get("skill"),
+                    payload.get("inputs"),
+                )
+            elif path == "/execute":
+                response_payload = self.engine.execute_plan(
+                    payload.get("plan_id", ""),
+                    principal.org_id,
+                    payload.get("output_format"),
+                )
+            elif path == "/solve":
                 response_payload = self.engine.solve(
                     payload.get("task", ""),
                     payload.get("mode"),

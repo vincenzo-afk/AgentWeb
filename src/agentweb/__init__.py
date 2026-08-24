@@ -7,7 +7,7 @@ from .credentials import BrowserCredentialStore
 from .engine import AgentWebEngine
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
-from .planner import Plan, PlanStep, Planner
+from .planner import Plan, PlanStep, PlanStore, Planner, StoredPlan
 from .router import Router, ToolCall, route
 from .scheduler import Scheduler
 from .skills import Skill, SkillRegistry, match_skill, register_skill
@@ -24,6 +24,8 @@ __all__ = [
     "Plan",
     "PlanStep",
     "Planner",
+    "PlanStore",
+    "StoredPlan",
     "Router",
     "Skill",
     "SkillRegistry",

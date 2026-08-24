@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from copy import deepcopy
 import uuid
 from urllib.parse import urlparse
 
@@ -22,7 +23,7 @@ from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .synthesis import synthesize
 from .parser import parse
-from .planner import Planner
+from .planner import Plan, PlanStore, Planner
 from .ranking import rank
 from .router import Router
 from .redaction import redact_text, redact_url
@@ -59,6 +60,7 @@ class AgentWebEngine:
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
         self.planner = Planner()
         self.router = Router()
+        self.plans = PlanStore()
         self.traces = TraceStore(self.memory.path)
         self.audit_store = KeyStore(self.memory.path)
         self.trust_engine = TrustEngine(
@@ -300,6 +302,44 @@ class AgentWebEngine:
             data["confidence"] = round(sum(data["field_confidence"].values()) / len(data["field_confidence"]), 2)
         return data
 
+    def create_plan(
+        self,
+        task: str,
+        mode: str | None = None,
+        org_id: str = "development",
+        skill: str | None = None,
+        inputs: dict | None = None,
+    ) -> dict:
+        normalized_task = task.strip() if isinstance(task, str) else task
+        plan = self.planner.plan(normalized_task, mode, skill, inputs)
+        tool_calls = self.router.route(plan)
+        record = self.plans.put(org_id, plan, normalized_task, inputs or {})
+        return {
+            "plan_id": plan.id,
+            "plan": self._plan_summary(plan, tool_calls),
+            "created_at": record.created_at,
+            "expires_at": record.expires_at,
+            "reusable": True,
+        }
+
+    def execute_plan(self, plan_id: str, org_id: str = "development", output_format: str | None = None) -> dict:
+        if not isinstance(plan_id, str) or not plan_id.strip():
+            raise ValueError("plan_id must be a non-empty string")
+        record = self.plans.get(org_id, plan_id.strip())
+        if record is None:
+            raise ValueError("plan not found or expired")
+        response = self.solve(
+            record.task,
+            mode=record.plan.estimated_mode,
+            org_id=org_id,
+            output_format=output_format,
+            skill=record.plan.skill,
+            inputs=deepcopy(record.inputs),
+            planned_plan=record.plan,
+        ).to_dict()
+        response["plan_id"] = record.plan.id
+        return response
+
     def solve(
         self,
         task: str,
@@ -308,9 +348,10 @@ class AgentWebEngine:
         output_format: str | None = None,
         skill: str | None = None,
         inputs: dict | None = None,
+        planned_plan: Plan | None = None,
     ) -> SolveResponse:
         task = task.strip() if isinstance(task, str) else task
-        plan = self.planner.plan(task, mode, skill, inputs)
+        plan = planned_plan or self.planner.plan(task, mode, skill, inputs)
         mode = plan.estimated_mode
         tool_calls = self.router.route(plan)
         synthesis_calls = [call for call in tool_calls if call.tool == "synthesize"]

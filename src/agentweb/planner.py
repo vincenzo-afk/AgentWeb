@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
+import time
 import uuid
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+from threading import RLock
 from typing import Any
 
 from .skills import Skill, SkillRegistry, built_in_skill_registry
@@ -32,6 +35,64 @@ class Plan:
         payload = asdict(self)
         payload["steps"] = [step.to_dict() for step in self.steps]
         return payload
+
+
+@dataclass(frozen=True)
+class StoredPlan:
+    plan: Plan
+    task: str
+    inputs: dict[str, Any]
+    created_at: float
+    expires_at: float
+
+
+class PlanStore:
+    """Bounded tenant-namespaced plan storage; plan inputs never reach disk."""
+
+    def __init__(self, ttl_seconds: int = 900, max_plans: int = 256, clock=time.time) -> None:
+        if int(ttl_seconds) < 1:
+            raise ValueError("ttl_seconds must be positive")
+        if int(max_plans) < 1:
+            raise ValueError("max_plans must be positive")
+        self.ttl_seconds = int(ttl_seconds)
+        self.max_plans = int(max_plans)
+        self._clock = clock
+        self._plans: dict[tuple[str, str], StoredPlan] = {}
+        self._lock = RLock()
+
+    def _purge_expired(self, now: float) -> None:
+        expired = [key for key, record in self._plans.items() if record.expires_at <= now]
+        for key in expired:
+            self._plans.pop(key, None)
+
+    def put(self, org_id: str, plan: Plan, task: str, inputs: dict[str, Any]) -> StoredPlan:
+        now = float(self._clock())
+        record = StoredPlan(plan, task, deepcopy(inputs), now, now + self.ttl_seconds)
+        key = (str(org_id), plan.id)
+        with self._lock:
+            self._purge_expired(now)
+            self._plans[key] = record
+            if len(self._plans) > self.max_plans:
+                oldest = min(self._plans.items(), key=lambda item: item[1].created_at)[0]
+                self._plans.pop(oldest, None)
+        return record
+
+    def get(self, org_id: str, plan_id: str) -> StoredPlan | None:
+        now = float(self._clock())
+        key = (str(org_id), str(plan_id))
+        with self._lock:
+            self._purge_expired(now)
+            return self._plans.get(key)
+
+    def delete(self, org_id: str, plan_id: str) -> bool:
+        with self._lock:
+            return self._plans.pop((str(org_id), str(plan_id)), None) is not None
+
+    def size(self) -> int:
+        now = float(self._clock())
+        with self._lock:
+            self._purge_expired(now)
+            return len(self._plans)
 
 
 class Planner:
