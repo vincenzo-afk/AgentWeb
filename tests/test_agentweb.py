@@ -864,6 +864,43 @@ class AgentWebTests(unittest.TestCase):
         self.assertIn("error", payload["values"])
         self.assertTrue(payload["values"]["error"])
 
+    def test_monitor_change_and_no_change_trigger_matching_workflows(self):
+        original_body = FixtureHandler.body
+        try:
+            monitor = self.engine.create_monitor(f"Watch {self.url}", "daily")
+            self.engine.workflows.create(
+                "Change workflow",
+                monitor.id,
+                "Summarize {target}",
+                event="monitor.change_detected",
+            )
+            self.engine.workflows.create(
+                "No-change workflow",
+                monitor.id,
+                "Confirm {target} is unchanged",
+                event="monitor.no_change",
+            )
+            first = self.engine.check_monitor(monitor)
+            self.assertEqual(first.last_event, "no_change")
+            second = self.engine.check_monitor(first)
+            self.assertEqual(second.last_event, "no_change")
+            FixtureHandler.body = b"<html><head><title>Changed</title></head><body>changed</body></html>"
+            third = self.engine.check_monitor(second)
+            self.assertEqual(third.last_event, "change_detected")
+
+            runs = self.engine.workflows.list_runs("development")
+            self.assertEqual(len(runs), 3)
+            self.assertEqual(sum(run["event"] == "monitor.change_detected" for run in runs), 1)
+            self.assertEqual(sum(run["event"] == "monitor.no_change" for run in runs), 2)
+            self.assertTrue(all(run["status"] == "queued" for run in runs))
+            jobs = [job for job in self.store.list_jobs("pending", "development") if job["job_type"] == "workflow_run"]
+            self.assertEqual(len(jobs), 3)
+            payloads = [json.loads(job["payload_json"])["values"] for job in jobs]
+            self.assertEqual(sum(values["event"] == "monitor.change_detected" for values in payloads), 1)
+            self.assertEqual(sum(values["event"] == "monitor.no_change" for values in payloads), 2)
+        finally:
+            FixtureHandler.body = original_body
+
     def test_scheduler_lease_token_blocks_stale_worker_after_reclaim(self):
         monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
         first = self.store.claim_due_job(time.time(), lease_seconds=1, org_id="development")
