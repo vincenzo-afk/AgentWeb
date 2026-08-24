@@ -313,6 +313,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             scope = "memory:read"
         elif path.startswith("/graph"):
             scope = "graph:read"
+        elif path.startswith("/workflows"):
+            scope = "workflow:manage"
         elif path.startswith("/crawl"):
             scope = "search:read"
         else:
@@ -354,6 +356,15 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     depth=depth,
                 )
                 self._send_json(HTTPStatus.OK, self._decorate_success_payload(graph_result.to_dict(), request_id), request_id)
+                return
+            if path == "/workflows":
+                workflows, next_cursor, has_more = _page(self.engine.workflows.list(principal.org_id), query)
+                self._send_json(HTTPStatus.OK, self._decorate_success_payload({"workflows": workflows, "data": workflows, "next_cursor": next_cursor, "has_more": has_more}, request_id), request_id)
+                return
+            if path == "/workflows/runs":
+                limit, _ = _page_window(query)
+                runs = self.engine.workflows.list_runs(principal.org_id, limit=limit)
+                self._send_json(HTTPStatus.OK, self._decorate_success_payload({"runs": runs, "data": runs}, request_id), request_id)
                 return
             if path == "/observe":
                 monitors, next_cursor, has_more = _page(self.engine.memory.list_monitors(principal.org_id), query)
@@ -532,6 +543,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             "/crawl": "search:read",
             "/graph/entities": "graph:write",
             "/graph/relations": "graph:write",
+            "/workflows": "workflow:manage",
             "/browser/sessions": "browser:execute",
             "/admin/keys": "admin:*",
             "/admin/browser-credentials": "admin:*",
@@ -547,7 +559,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json()
-            if path in {"/solve", "/execute", "/observe", "/crawl", "/graph/entities", "/graph/relations", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
+            if path in {"/solve", "/execute", "/observe", "/crawl", "/graph/entities", "/graph/relations", "/workflows", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
@@ -605,6 +617,16 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     principal.org_id,
                     payload.get("source_ids", payload.get("source_id")),
                 ).to_dict()
+            elif path == "/workflows":
+                response_status = HTTPStatus.CREATED
+                response_payload = self.engine.workflows.create(
+                    name=payload.get("name", ""),
+                    monitor_id=payload.get("monitor_id", ""),
+                    task_template=payload.get("task_template", payload.get("task", "")),
+                    event=payload.get("event", "monitor.change_detected"),
+                    mode=payload.get("mode", "focus"),
+                    org_id=principal.org_id,
+                )
             elif path == "/browser/sessions":
                 session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id, payload.get("credential_id"), payload.get("session_state_id"))
                 response_payload = session.to_dict()

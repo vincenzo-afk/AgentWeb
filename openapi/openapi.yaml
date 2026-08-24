@@ -451,6 +451,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GraphRelation'
+  /workflows:
+    get:
+      summary: List event-driven workflow definitions
+      operationId: listWorkflows
+      security:
+        - bearerAuth: [workflow:manage]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Organization-scoped workflow definitions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowPage'
+    post:
+      summary: Register a monitor event workflow
+      operationId: createWorkflow
+      security:
+        - bearerAuth: [workflow:manage]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowInput'
+      responses:
+        '201':
+          description: Workflow definition created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+  /workflows/runs:
+    get:
+      summary: List workflow execution runs
+      operationId: listWorkflowRuns
+      security:
+        - bearerAuth: [workflow:manage]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Organization-scoped workflow runs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRunPage'
   /admin/keys:
     get:
       summary: List redacted API keys for the authenticated organization
@@ -827,6 +878,73 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    WorkflowInput:
+      type: object
+      required: [name, monitor_id, task_template]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        monitor_id:
+          type: string
+        task_template:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Bounded format template. Supported values include {event}, {monitor_id}, {target}, {from_hash}, {to_hash}, and {timestamp}.
+        event:
+          type: string
+          enum: [monitor.change_detected, monitor.no_change]
+          default: monitor.change_detected
+        mode:
+          type: string
+          enum: [flash, focus, dive]
+          default: focus
+    Workflow:
+      type: object
+      required: [id, name, monitor_id, event, task_template, mode, status]
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        name: { type: string }
+        monitor_id: { type: string }
+        event: { type: string }
+        task_template: { type: string }
+        mode: { type: string }
+        status: { type: string }
+        created_at: { type: number }
+        updated_at: { type: number }
+    WorkflowRun:
+      type: object
+      required: [id, workflow_id, monitor_id, event, status, created_at]
+      properties:
+        id: { type: string }
+        workflow_id: { type: string }
+        org_id: { type: string }
+        monitor_id: { type: string }
+        event: { type: string }
+        status: { type: string, enum: [running, succeeded, failed] }
+        execution_id: { type: [string, 'null'] }
+        error: { type: [string, 'null'] }
+        created_at: { type: number }
+        completed_at: { type: [number, 'null'] }
+    WorkflowPage:
+      type: object
+      required: [workflows, data, has_more]
+      properties:
+        _meta: { $ref: '#/components/schemas/ResponseMetadata' }
+        workflows: { type: array, items: { $ref: '#/components/schemas/Workflow' } }
+        data: { type: array, items: { $ref: '#/components/schemas/Workflow' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    WorkflowRunPage:
+      type: object
+      required: [runs, data]
+      properties:
+        _meta: { $ref: '#/components/schemas/ResponseMetadata' }
+        runs: { type: array, items: { $ref: '#/components/schemas/WorkflowRun' } }
+        data: { type: array, items: { $ref: '#/components/schemas/WorkflowRun' } }
     GraphEntityInput:
       type: object
       required: [type, name]

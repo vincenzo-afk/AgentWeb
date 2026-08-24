@@ -11,6 +11,9 @@ from urllib.request import Request, urlopen
 
 from agentweb.api import create_server
 from agentweb.graph import GraphStore
+from agentweb.memory import MemoryStore
+from agentweb.models import Monitor
+from agentweb.workflows import WorkflowStore
 
 
 class GraphStoreTests(unittest.TestCase):
@@ -54,6 +57,41 @@ class GraphStoreTests(unittest.TestCase):
         result = self.store.query(related_to="Ada", org_id="org_a", depth=2)
         self.assertEqual({edge.relation for edge in result.edges}, {"works_on", "contains"})
         self.assertEqual({node.name for node in result.nodes}, {"Ada", "Graph", "AgentWeb"})
+
+
+class WorkflowStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        path = Path(self.temp_dir.name) / "workflow.sqlite3"
+        self.memory = MemoryStore(path)
+        self.executions: list[tuple[str, str, str]] = []
+
+        def execute(task: str, mode: str, org_id: str):
+            self.executions.append((task, mode, org_id))
+            return {"execution_id": "exec_workflow"}
+
+        self.store = WorkflowStore(path, execute)
+        self.monitor = Monitor(id="mon_workflow", task="Watch https://example.com", org_id="org_a", target_url="https://example.com")
+        self.memory.create_monitor(self.monitor)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_change_event_renders_template_and_persists_run(self) -> None:
+        workflow = self.store.create("Summarize changes", self.monitor.id, "Summarize {target} from {to_hash}", org_id="org_a")
+        runs = self.store.trigger_for_monitor(self.monitor.id, "org_a", "monitor.change_detected", {"target": "https://example.com", "to_hash": "hash_new"})
+        self.assertEqual(workflow["event"], "monitor.change_detected")
+        self.assertEqual(self.executions, [("Summarize https://example.com from hash_new", "focus", "org_a")])
+        self.assertEqual(runs[0]["status"], "succeeded")
+        self.assertEqual(runs[0]["execution_id"], "exec_workflow")
+        self.assertEqual(self.store.list_runs("org_b"), [])
+
+    def test_template_errors_are_recorded_without_raising(self) -> None:
+        self.store.create("Broken", self.monitor.id, "Use {missing}", org_id="org_a")
+        runs = self.store.trigger_for_monitor(self.monitor.id, "org_a", "monitor.change_detected", {})
+        self.assertEqual(runs[0]["status"], "failed")
+        self.assertIn("missing", runs[0]["error"])
+        self.assertEqual(self.executions, [])
 
 
 class GraphApiTests(unittest.TestCase):
@@ -107,6 +145,15 @@ class GraphApiTests(unittest.TestCase):
 
     def test_graph_depth_is_bounded(self) -> None:
         status, payload, _ = self.request("GET", "/v1/graph/query?depth=4")
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["type"], "invalid_request")
+
+    def test_workflow_routes_are_tenant_scoped_and_validated(self) -> None:
+        status, payload, _ = self.request("GET", "/v1/workflows")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["workflows"], [])
+        self.assertEqual(payload["_meta"]["path"], "/v1/workflows")
+        status, payload, _ = self.request("POST", "/v1/workflows", {"name": "Missing monitor", "monitor_id": "mon_missing", "task_template": "Summarize {target}"})
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["type"], "invalid_request")
 

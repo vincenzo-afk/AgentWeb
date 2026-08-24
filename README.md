@@ -41,7 +41,8 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Observability | Each solve, browser, and monitor operation records secret-safe organization-scoped spans retrievable through `/report/{execution_id}`. |
 | Browser execution | `POST /browser/sessions` renders JavaScript pages through fresh contexts and a bounded lazily spawned browser-worker pool; worker failures remain typed and retryable. Authorized operators can provision encrypted, origin-bound storage state and reuse it through opaque `session_state_id` references without exposing tokens. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys and browser credentials/session states, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
-| Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; `GET /graph/query` supports entity, relation, and related-node filters. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
+| Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; `GET /graph/query` supports entity, relation, related-node, and bounded depth filters. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
+| Event-driven workflows | `POST /workflows` registers an organization-scoped task template for monitor change events; matching changes render the template, execute a grounded solve, and persist a redacted run record available through `GET /workflows/runs`. |
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
 
@@ -177,6 +178,9 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `GET` | `/graph/query` | Query tenant-scoped graph nodes and edges using optional `entity_type`, `related_to`, `relation`, and `limit` filters; requires `graph:read`. |
 | `POST` | `/graph/entities` | Create or merge a graph entity; requires `graph:write` and supports `Idempotency-Key`. |
 | `POST` | `/graph/relations` | Create or corroborate a graph relation; requires `graph:write` and supports `Idempotency-Key`. |
+| `GET` | `/workflows` | List organization-scoped event-driven workflow definitions; requires `workflow:manage`. |
+| `POST` | `/workflows` | Register a monitor event workflow with a bounded task template; requires `workflow:manage` and supports `Idempotency-Key`. |
+| `GET` | `/workflows/runs` | List organization-scoped workflow execution records; requires `workflow:manage`. |
 | `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace belonging to the caller's organization. |
 | `GET` | `/report/{execution_id}/replay` | Retrieve an ordered, read-only historical replay projection with sanitized summaries; no network calls or side effects are performed. |
 | `GET` | `/admin/keys` | List redacted, cursor-paginated API keys for the caller's organization; requires `admin:*`. |
@@ -272,7 +276,7 @@ These limitations are explicit so the repository's runnable behavior remains dis
 
 ## Roadmap
 
-The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline, several Phase 1 foundations, and a first Phase 2 graph storage/query slice, including bounded durable crawling, scheduled monitoring, process-isolated browser execution, encrypted reusable browser session state, tenant-scoped graph entities/relations, and corroboration-aware graph confidence. Future phases cover graph-aware synthesis, connector registry expansion, vector retrieval, and event-driven workflows.
+The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline, several Phase 1 foundations, a Phase 2 graph storage/query slice, and an initial event-driven workflow trigger, including bounded durable crawling, scheduled monitoring, process-isolated browser execution, encrypted reusable browser session state, tenant-scoped graph entities/relations, corroboration-aware graph confidence, monitor-triggered task templates, and persisted workflow runs. Future phases cover graph-aware synthesis, connector registry expansion, vector retrieval, distributed workflow execution, and richer event integrations.
 
 ## Contributing
 

@@ -34,6 +34,7 @@ from .search import SearchProvider, build_search_provider, search
 from .secrets import SecretProvider, build_provider
 from .trace import Span, TraceStore
 from .trust_engine import TrustEngine
+from .workflows import WorkflowStore
 
 URL_RE = re.compile(r"https?://[^\s)\]>]+")
 _MISSING_FIELD = object()
@@ -49,6 +50,7 @@ class AgentWebEngine:
     ) -> None:
         self.memory = memory or MemoryStore()
         self.graph = GraphStore(self.memory.path)
+        self.workflows = WorkflowStore(self.memory.path, self._run_workflow)
         self.queue_coordinator = queue_coordinator
         metric_backend = (
             PostgresMetricStore(queue_coordinator)
@@ -514,6 +516,9 @@ class AgentWebEngine:
             actions=actions,
         )
 
+    def _run_workflow(self, task: str, mode: str, org_id: str) -> SolveResponse:
+        return self.solve(task, mode=mode, org_id=org_id)
+
     def run_retention(self, payload: dict) -> dict:
         if not isinstance(payload, dict):
             raise ValueError("retention payload must be an object")
@@ -785,6 +790,20 @@ class AgentWebEngine:
         monitor.last_event = "change_detected" if changed else "no_change"
         if changed:
             monitor.last_change_at = now
+            latest = self.memory.get_latest(monitor.target_url, monitor.org_id)
+            self.workflows.trigger_for_monitor(
+                monitor.id,
+                monitor.org_id,
+                "monitor.change_detected",
+                {
+                    "event": "monitor.change_detected",
+                    "monitor_id": monitor.id,
+                    "target": monitor.target_url,
+                    "from_hash": previous["content_hash"] if previous else "",
+                    "to_hash": latest["content_hash"] if latest else "",
+                    "timestamp": now,
+                },
+            )
             if monitor.webhook_url:
                 secret = self.secret_provider.get("WEBHOOK_SIGNING_KEY", required=False) or self.secret_provider.get("AGENTWEB_WEBHOOK_SIGNING_KEY", required=False) or ""
                 if not secret:

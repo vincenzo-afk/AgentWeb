@@ -28,6 +28,7 @@ ALL_SCOPES = {
     "memory:read",
     "graph:read",
     "graph:write",
+    "workflow:manage",
     "admin:*",
 }
 

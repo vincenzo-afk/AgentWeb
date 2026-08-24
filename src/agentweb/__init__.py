@@ -16,6 +16,7 @@ from .rdbms import DatabaseConfig, PostgresDistributedQueue, PostgresRelationalS
 from .search import JsonSearchProvider, SearchProviderConfig, SearchProviderError, build_search_provider, search
 from .secrets import MappingSecretProvider, SecretProviderConfig, build_provider
 from .synthesis import SynthesisResult, synthesize
+from .workflows import WorkflowStore
 
 __all__ = [
     "AgentWebEngine",
@@ -56,6 +57,7 @@ __all__ = [
     "open_distributed_queue",
     "open_relational_store",
     "synthesize",
+    "WorkflowStore",
     "route",
     "register_skill",
     "build_search_provider",
