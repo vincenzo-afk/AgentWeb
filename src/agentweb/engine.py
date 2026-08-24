@@ -16,6 +16,7 @@ from .browser import BrowserEngine
 from .browser_sessions import BrowserSessionStore
 from .crawler import Crawler
 from .credentials import BrowserCredentialStore
+from .connectors import ConnectorRegistry
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .graph import GraphStore
 from .memory import MemoryStore
@@ -64,7 +65,8 @@ class AgentWebEngine:
         self.session_states = BrowserSessionStore(self.memory.path, self.secret_provider)
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
         self.planner = Planner()
-        self.router = Router()
+        self.connectors = ConnectorRegistry()
+        self.router = Router(self.connectors)
         self.plans = PlanStore()
         self.traces = TraceStore(self.memory.path)
         self.audit_store = KeyStore(self.memory.path)
@@ -153,7 +155,7 @@ class AgentWebEngine:
             extraction_confidence=0.70,
         )
 
-    def _source_from_url(self, url: str, org_id: str = "development") -> Source | None:
+    def _source_from_url(self, url: str, org_id: str = "development", extraction_hints: dict | None = None) -> Source | None:
         decision = self.trust_engine.should_fetch(url)
         if not decision.allowed:
             return None
@@ -173,7 +175,17 @@ class AgentWebEngine:
             "tables": [table[:20] for table in parsed.tables[:5]],
             "entities": parsed.entities[:30],
         }
-        if not structured_data["tables"] and not structured_data["entities"]:
+        if extraction_hints:
+            connector_fields: dict[str, object] = {}
+            for field, expected_type in list(extraction_hints.items())[:20]:
+                if not isinstance(field, str) or not isinstance(expected_type, str):
+                    continue
+                candidate = title if field.lower() == "title" else text[:200]
+                normalized = normalize(candidate, expected_type)
+                connector_fields[field] = normalized.value if normalized.normalized else candidate
+            if connector_fields:
+                structured_data["connector_fields"] = connector_fields
+        if not structured_data["tables"] and not structured_data["entities"] and "connector_fields" not in structured_data:
             structured_data = None
         return Source(
             id=self._source_id(result.url),
@@ -448,6 +460,7 @@ class AgentWebEngine:
             )
         )
         source_candidates: list[Source] = []
+        ranking_biases: dict[str, dict] = {}
         actions: list[dict[str, object]] = [{"tool": "router", "operation": "route", "status": "complete", "call_count": len(tool_calls)}]
         graph_context = self._graph_query_inputs(inputs)
         if graph_context is not None:
@@ -467,6 +480,7 @@ class AgentWebEngine:
                 try:
                     session = self._open_browser_session(url, browser_actions, org_id, credential_id, session_state_id)
                     source = self._source_from_browser_session(url, session)
+
                     session_status = getattr(session, "status", "complete")
                     spans.append(self._span("browser", "escalated_open", fetch_started, session_status, redact_url(url), f"{len(getattr(session, 'actions', []) or [])} action(s)"))
                     actions.append(
@@ -487,7 +501,7 @@ class AgentWebEngine:
             else:
                 cached = self.memory.reusable_snapshot(url, org_id, self._reuse_window(task))
                 reuse_hits += int(cached is not None)
-                source = self._source_from_snapshot(cached) if cached else self._source_from_url(url, org_id)
+                source = self._source_from_snapshot(cached) if cached else self._source_from_url(url, org_id, params.get("extraction_hints"))
                 spans.append(
                     self._span(
                         "extractor",
@@ -508,6 +522,8 @@ class AgentWebEngine:
                 )
             if source:
                 source_candidates.append(source)
+                if isinstance(params.get("ranking_bias"), dict):
+                    ranking_biases[source.id] = params["ranking_bias"]
 
         if not source_candidates and any(call.tool == "search" for call in tool_calls):
             search_started = time.time()
@@ -530,7 +546,7 @@ class AgentWebEngine:
                     )
                 )
 
-        ranked = rank(source_candidates, task)
+        ranked = rank(source_candidates, task, ranking_biases)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
         limit = 1 if mode == "flash" else 3 if mode == "focus" else 5
         selected = [item for item in ranked if item.include][:limit]

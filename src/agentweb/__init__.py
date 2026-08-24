@@ -3,6 +3,7 @@
 from .api import create_server
 from .browser import BrowserEngine, BrowserSession
 from .browser_sessions import BrowserSessionStore
+from .connectors import Connector, ConnectorRegistry
 from .credentials import BrowserCredentialStore
 from .engine import AgentWebEngine
 from .graph import Entity, GraphResult, GraphStore, Relation
@@ -20,6 +21,8 @@ from .workflows import WorkflowStore
 
 __all__ = [
     "AgentWebEngine",
+    "Connector",
+    "ConnectorRegistry",
     "Entity",
     "GraphResult",
     "GraphStore",

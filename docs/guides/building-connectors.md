@@ -1,18 +1,28 @@
 # Building Connectors
 
-Connectors extend AgentWeb's [Router](../core/router.md) with knowledge of a specific source or site family (e.g., a particular ecommerce platform's page structure, or a documentation platform's navigation pattern), improving extraction accuracy and reducing wasted browsing.
+Connectors extend AgentWeb’s [Router](../core/router.md) with knowledge of a specific source or site family. A connector can improve extraction accuracy, add a bounded browser interaction script, and bias ranking for a recurring source family.
 
-## When to build a connector
+## Register a connector
 
-- You repeatedly target the same site/platform and generic extraction misses fields.
-- A site has a login flow or interaction pattern generic browsing doesn't handle well.
-- You want to bias routing toward/away from specific sources for your domain.
+```python
+from agentweb import AgentWebEngine, Connector
 
-## Steps
+engine = AgentWebEngine()
+engine.connectors.register(
+    Connector(
+        name="github-releases",
+        pattern="https://github.com/org/repo/releases",
+        extraction_hints={"published_at": "date", "title": "string"},
+        interaction_script=[{"type": "wait_for", "selector": "main"}],
+        ranking_bias={"boost": ["release"], "penalize": ["sponsored"]},
+    )
+)
+```
 
-1. Define the target pattern (URL structure or site family).
-2. Provide extraction hints (selectors, expected schema) — see [core/extraction.md](../core/extraction.md).
-3. Optionally provide a browser interaction script for login/navigation flows — see [core/browser-engine.md](../core/browser-engine.md).
-4. Register the connector and test against representative URLs.
+The pattern may be a complete URL prefix or a hostname. Hostname patterns match the host and its subdomains. When multiple connectors match, the longest normalized pattern wins; ties are resolved by connector name. Duplicate connector names are rejected, and connector action lists are bounded to 20 entries.
 
-Connectors compose with [Internet Skills](../concepts/internet-skills.md) — a skill can be defined to prefer a specific connector for a given task class.
+## Runtime behavior
+
+The router annotates matching `extract` and `browser` calls with the connector name. Extraction hints are applied to static fetches as bounded normalized fields, browser connectors supply their interaction script only when the caller has not provided actions, and ranking bias terms adjust only sources produced by the matching connector. Generic routing remains the fallback when no connector matches.
+
+Connector registration is process-local by design. Applications should register connectors during startup and keep patterns narrow. Connector actions must remain authorized, same-origin, and free of raw credentials; the existing browser isolation and trust policy still applies.

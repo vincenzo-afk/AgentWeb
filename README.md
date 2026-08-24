@@ -40,6 +40,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Authentication and limits | Bearer keys support endpoint scopes; persistent keys are PBKDF2-hashed, organization-scoped, revocable, briefly cached, and protected by per-identity rate limits. |
 | Observability | Each solve, browser, and monitor operation records secret-safe organization-scoped spans retrievable through `/report/{execution_id}`. |
 | Browser execution | `POST /browser/sessions` renders JavaScript pages through fresh contexts and a bounded lazily spawned browser-worker pool; worker failures remain typed and retryable. Authorized operators can provision encrypted, origin-bound storage state and reuse it through opaque `session_state_id` references without exposing tokens. |
+| Connector routing | Applications can register URL/domain connectors through `ConnectorRegistry`; the router selects the longest matching pattern and applies bounded extraction hints, default browser actions, and ranking bias without changing generic fallback behavior. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys and browser credentials/session states, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
 | Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; extraction and monitor checks automatically add page/mention provenance; `GET /graph/query` supports entity, relation, related-node, and bounded depth filters. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
 | Event-driven workflows | `POST /workflows` registers an organization-scoped task template for monitor change events; matching changes render the template, execute a grounded solve, and persist a redacted run record available through `GET /workflows/runs`. |
@@ -205,7 +206,7 @@ for source in result.sources:
     print(source.url, source.trust_score)
 ```
 
-`AgentWebEngine` also exposes `extract`, `create_monitor`, and `check_monitor`. The package additionally exports deterministic `Planner`, `Router`, `Plan`, `PlanStep`, `ToolCall`, and `SkillRegistry` contracts for local orchestration. Use `MemoryStore` with a custom SQLite path when an application needs explicit data-location control.
+`AgentWebEngine` also exposes `extract`, `create_monitor`, and `check_monitor`. The package additionally exports deterministic `Planner`, `Router`, `Plan`, `PlanStep`, `ToolCall`, `SkillRegistry`, `Connector`, and `ConnectorRegistry` contracts for local orchestration. Register connectors during startup through `engine.connectors`. Use `MemoryStore` with a custom SQLite path when an application needs explicit data-location control.
 
 ## Architecture
 
