@@ -11,6 +11,7 @@ from .learning import LearningStore
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from .planner import Plan, PlanStep, PlanStore, Planner, StoredPlan
+from .plugins import Plugin, PluginRegistry, plugin_registry, register_plugin
 from .router import Router, ToolCall, route
 from .scheduler import Scheduler
 from .skills import Skill, SkillRegistry, match_skill, register_skill
@@ -38,6 +39,10 @@ __all__ = [
     "Planner",
     "PlanStore",
     "StoredPlan",
+    "Plugin",
+    "PluginRegistry",
+    "plugin_registry",
+    "register_plugin",
     "Router",
     "Skill",
     "SkillRegistry",

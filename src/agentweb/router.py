@@ -5,6 +5,7 @@ from typing import Any
 
 from .connectors import ConnectorRegistry
 from .planner import Plan
+from .plugins import PluginRegistry
 
 
 @dataclass(frozen=True)
@@ -19,8 +20,9 @@ class ToolCall:
 class Router:
     """Translate plans into deterministic calls and apply URL connector overrides."""
 
-    def __init__(self, connectors: ConnectorRegistry | None = None) -> None:
+    def __init__(self, connectors: ConnectorRegistry | None = None, plugins: PluginRegistry | None = None) -> None:
         self.connectors = connectors or ConnectorRegistry()
+        self.plugins = plugins or PluginRegistry()
 
     _ALIASES = {
         "search_each_item": "search",
@@ -44,7 +46,7 @@ class Router:
                 calls.append(ToolCall(tool, item))
         return calls
 
-    def route(self, plan: Plan) -> list[ToolCall]:
+    def route(self, plan: Plan, org_id: str = "development") -> list[ToolCall]:
         if not isinstance(plan, Plan):
             raise TypeError("plan must be a Plan")
         calls: list[ToolCall] = []
@@ -57,8 +59,8 @@ class Router:
                 expanded = self._url_calls(tool, params)
                 for call in expanded:
                     connector = self.connectors.match(call.params.get("url", ""))
+                    enriched = dict(call.params)
                     if connector is not None:
-                        enriched = dict(call.params)
                         enriched["connector"] = connector.name
                         if connector.extraction_hints:
                             enriched["extraction_hints"] = connector.extraction_hints
@@ -66,12 +68,24 @@ class Router:
                             enriched["actions"] = connector.interaction_script
                         if connector.ranking_bias:
                             enriched["ranking_bias"] = connector.ranking_bias
-                        call = ToolCall(call.tool, enriched)
+                    plugin_overrides = self.plugins.connector_overrides(
+                        org_id, str(enriched.get("url", "")), tool, enriched
+                    )
+                    if plugin_overrides:
+                        enriched["plugin_connector"] = plugin_overrides.pop("plugin", None)
+                        for key, value in plugin_overrides.items():
+                            if key == "interaction_script" and tool == "browser" and not enriched.get("actions"):
+                                enriched["actions"] = value
+                            elif key == "extraction_hints":
+                                enriched[key] = value
+                            elif key == "ranking_bias":
+                                enriched[key] = value
+                    call = ToolCall(call.tool, enriched)
                     calls.append(call)
             else:
                 calls.append(ToolCall(tool, params))
         return calls
 
 
-def route(plan: Plan) -> list[ToolCall]:
-    return Router().route(plan)
+def route(plan: Plan, org_id: str = "development") -> list[ToolCall]:
+    return Router().route(plan, org_id=org_id)

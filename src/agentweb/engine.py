@@ -28,6 +28,7 @@ from .normalizer import normalize
 from .synthesis import synthesize
 from .parser import parse
 from .planner import Plan, PlanStore, Planner
+from .plugins import PluginRegistry
 from .ranking import rank
 from .router import Router
 from .redaction import redact_text, redact_url
@@ -66,9 +67,10 @@ class AgentWebEngine:
         self.credentials = BrowserCredentialStore(self.memory.path, self.secret_provider)
         self.session_states = BrowserSessionStore(self.memory.path, self.secret_provider)
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
-        self.planner = Planner()
+        self.plugins = PluginRegistry()
+        self.planner = Planner(plugins=self.plugins)
         self.connectors = ConnectorRegistry()
-        self.router = Router(self.connectors)
+        self.router = Router(self.connectors, self.plugins)
         self.plans = PlanStore()
         self.traces = TraceStore(self.memory.path)
         self.audit_store = KeyStore(self.memory.path)
@@ -333,8 +335,8 @@ class AgentWebEngine:
         inputs: dict | None = None,
     ) -> dict:
         normalized_task = task.strip() if isinstance(task, str) else task
-        plan = self.planner.plan(normalized_task, mode, skill, inputs)
-        tool_calls = self.router.route(plan)
+        plan = self.planner.plan(normalized_task, mode, skill, inputs, org_id=org_id)
+        tool_calls = self.router.route(plan, org_id=org_id)
         record = self.plans.put(org_id, plan, normalized_task, inputs or {})
         return {
             "plan_id": plan.id,
@@ -436,9 +438,9 @@ class AgentWebEngine:
         planned_plan: Plan | None = None,
     ) -> SolveResponse:
         task = task.strip() if isinstance(task, str) else task
-        plan = planned_plan or self.planner.plan(task, mode, skill, inputs)
+        plan = planned_plan or self.planner.plan(task, mode, skill, inputs, org_id=org_id)
         mode = plan.estimated_mode
-        tool_calls = self.router.route(plan)
+        tool_calls = self.router.route(plan, org_id=org_id)
         synthesis_calls = [call for call in tool_calls if call.tool == "synthesize"]
         synthesis_format = output_format or (synthesis_calls[0].params.get("output_format") if synthesis_calls else None) or "text"
 
@@ -548,7 +550,7 @@ class AgentWebEngine:
                     )
                 )
 
-        ranked = rank(source_candidates, task, ranking_biases)
+        ranked = rank(source_candidates, task, ranking_biases, plugins=self.plugins, org_id=org_id)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
         limit = 1 if mode == "flash" else 3 if mode == "focus" else 5
         selected = [item for item in ranked if item.include][:limit]

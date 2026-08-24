@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from threading import RLock
 from typing import Any
 
+from .plugins import PluginRegistry
 from .skills import Skill, SkillRegistry, built_in_skill_registry
 
 _URL_RE = re.compile(r"https?://[^\s)\]>]+")
@@ -98,8 +99,9 @@ class PlanStore:
 class Planner:
     """Deterministic local planner; no task content is persisted."""
 
-    def __init__(self, skills: SkillRegistry | None = None) -> None:
+    def __init__(self, skills: SkillRegistry | None = None, plugins: PluginRegistry | None = None) -> None:
         self.skills = skills or built_in_skill_registry()
+        self.plugins = plugins or PluginRegistry()
 
     @staticmethod
     def _intent(task: str) -> str:
@@ -150,6 +152,7 @@ class Planner:
         mode: str | None = None,
         skill: str | None = None,
         inputs: dict[str, Any] | None = None,
+        org_id: str = "development",
     ) -> Plan:
         if not isinstance(task, str) or not task.strip() or len(task.strip()) > 2000:
             raise ValueError("task must contain between 1 and 2000 characters")
@@ -168,6 +171,7 @@ class Planner:
                 raise ValueError(f"unknown skill: {skill.strip()}")
         else:
             selected = self.skills.match(task)
+        plugin_hooks = {} if skill is not None or selected is not None else self.plugins.skill_hooks(org_id, task, inputs)
         intent = self._intent(task)
         estimated_mode = mode or (selected.default_mode if selected else self._mode(intent, task))
         if selected:
@@ -179,6 +183,15 @@ class Planner:
                     if Planner._requires_browser(task):
                         item["type"] = "browser"
             steps = tuple(PlanStep(item["type"], dict(item.get("params", {}))) for item in raw_steps)
+        elif plugin_hooks.get("plan_template"):
+            raw_steps = []
+            for item in plugin_hooks["plan_template"]:
+                if isinstance(item, dict) and isinstance(item.get("type"), str) and isinstance(item.get("params", {}), dict):
+                    step = deepcopy(item)
+                    step.setdefault("params", {}).setdefault("task", task)
+                    step["params"].setdefault("inputs", deepcopy(inputs))
+                    raw_steps.append(step)
+            steps = tuple(PlanStep(item["type"], dict(item.get("params", {}))) for item in raw_steps) or self._generic_steps(task, estimated_mode, inputs)
         else:
             steps = self._generic_steps(task, estimated_mode, inputs)
         return Plan(
@@ -186,5 +199,5 @@ class Planner:
             steps=steps,
             estimated_mode=estimated_mode,
             intent=intent,
-            skill=selected.name if selected else None,
+            skill=selected.name if selected else ("plugin:" + str(plugin_hooks.get("plugin")) if plugin_hooks else None),
         )

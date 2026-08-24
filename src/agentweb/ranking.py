@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from .models import Source
+from .plugins import PluginRegistry
 
 
 @dataclass
@@ -50,7 +51,13 @@ def _content_type_fit(source: Source) -> float:
     return 1.0 if normalized in {"text/html", "application/xhtml+xml", "text/plain", "application/pdf"} else 0.4
 
 
-def rank(sources: list[Source], task_context: str, source_biases: dict[str, dict] | None = None) -> list[RankedSource]:
+def rank(
+    sources: list[Source],
+    task_context: str,
+    source_biases: dict[str, dict] | None = None,
+    plugins: PluginRegistry | None = None,
+    org_id: str = "development",
+) -> list[RankedSource]:
     """Rank sources deterministically and retain low-scoring evidence for inspection."""
     domain_counts: dict[str, int] = {}
     for source in sources:
@@ -76,6 +83,7 @@ def rank(sources: list[Source], task_context: str, source_biases: dict[str, dict
         penalties = bias.get("penalize", []) if isinstance(bias, dict) else []
         score += min(0.15, 0.05 * sum(str(term).lower() in haystack for term in boosts))
         score -= min(0.15, 0.05 * sum(str(term).lower() in haystack for term in penalties))
+        score = plugins.ranker_scores(org_id, source, task_context, score) if plugins is not None else score
         score = round(min(1.0, max(0.0, score)), 4)
         ranked.append(RankedSource(source=source, score=score, include=score >= 0.25))
     ranked.sort(key=lambda item: item.score, reverse=True)
