@@ -124,6 +124,7 @@ Configuration is provided through environment variables and CLI flags. No secret
 | `AGENTWEB_WEBHOOK_SIGNING_KEY` | unset | HMAC secret required before change alerts can be delivered. |
 | `AGENTWEB_ALLOW_PRIVATE_TARGETS` | unset | Test-only override for local fixture servers; do not enable in a network-facing deployment. |
 | `AGENTWEB_QUIET` | unset | Set to `1` to suppress request logs. |
+| `LOG_LEVEL` | `info` | Minimum structured request-log severity: `debug`, `info`, `warn`, or `error`. |
 | `AGENTWEB_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed for CORS; wildcard CORS is retained only for unauthenticated local development. |
 | `AGENTWEB_BROWSER_PROCESS_WORKERS` | `1` | Bounded spawned browser-worker process count; set to `0` for direct in-process execution, capped at 8. |
 | `AGENTWEB_ENV` | `development` | Runtime environment: `development`, `staging`, or `production`; non-development environments fail closed on local-only secrets. |

@@ -746,7 +746,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8000, data_path: str = "a
     store = MemoryStore(data_path)
     provider = build_provider()
     coordinator = open_distributed_queue(DatabaseConfig.from_environment(provider))
-    server.logger = StructuredLogger()  # type: ignore[attr-defined]
+    server.logger = StructuredLogger(min_level=os.getenv("LOG_LEVEL", "info"))  # type: ignore[attr-defined]
     server.engine = AgentWebEngine(store, secret_provider=provider, queue_coordinator=coordinator)  # type: ignore[attr-defined]
     server.queue_coordinator = coordinator  # type: ignore[attr-defined]
     server.authenticator = Authenticator(data_path, provider=provider)  # type: ignore[attr-defined]

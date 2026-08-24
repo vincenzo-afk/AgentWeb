@@ -25,7 +25,8 @@ _SENSITIVE_KEYS = {
     "secret",
     "token",
 }
-_LEVELS = {"debug", "info", "warn", "error"}
+_LEVEL_ORDER = {"debug": 10, "info": 20, "warn": 30, "error": 40}
+_LEVELS = set(_LEVEL_ORDER)
 
 
 class StructuredLogger:
@@ -36,9 +37,13 @@ class StructuredLogger:
     raw page bodies or secret values.
     """
 
-    def __init__(self, stream: TextIO | None = None, clock=time.time) -> None:
+    def __init__(self, stream: TextIO | None = None, clock=time.time, min_level: str = "info") -> None:
+        normalized_level = str(min_level).lower().strip()
+        if normalized_level not in _LEVELS:
+            raise ValueError("min_level must be debug, info, warn, or error")
         self.stream = stream or sys.stderr
         self.clock = clock
+        self.min_level = normalized_level
         self._lock = RLock()
 
     @staticmethod
@@ -82,6 +87,8 @@ class StructuredLogger:
             record["execution_id"] = redact_text(str(execution_id))[:120]
         if extra:
             record["details"] = self._safe_extra(redact_mapping(extra))
+        if _LEVEL_ORDER[level] < _LEVEL_ORDER[self.min_level]:
+            return record
         line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
         with self._lock:
             self.stream.write(line + "\n")

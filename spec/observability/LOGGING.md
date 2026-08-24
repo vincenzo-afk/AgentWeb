@@ -1,7 +1,7 @@
 # Logging
 
 ## Levels
-`debug` (local/dev only), `info` (normal operation events), `warn` (degraded-but-handled, e.g., a fallback engaged), `error` (failed operation requiring attention).
+`debug` (local/dev only), `info` (normal operation events), `warn` (degraded-but-handled, e.g., a fallback engaged), `error` (failed operation requiring attention). The `LOG_LEVEL` environment variable sets the minimum emitted severity and defaults to `info`; values outside these four levels fail fast during server construction.
 
 ## Required fields
 Every log line includes `request_id` or `execution_id` where applicable, `component`, `timestamp`, and `level`, so logs can be correlated with a specific run's [execution trace](TRACING.md).
