@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from .alerting import DeliveryResult, send_webhook
 from .browser import BrowserEngine
 from .crawler import Crawler
+from .credentials import BrowserCredentialStore
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .memory import MemoryStore
 from .metrics import MetricStore, MetricsRegistry
@@ -40,6 +41,7 @@ class AgentWebEngine:
         self.memory = memory or MemoryStore()
         self.metrics = MetricsRegistry(MetricStore(self.memory.path))
         self.secret_provider = secret_provider or build_provider()
+        self.credentials = BrowserCredentialStore(self.memory.path, self.secret_provider)
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
         self.queue_coordinator = queue_coordinator
         self.traces = TraceStore(self.memory.path)
@@ -139,12 +141,17 @@ class AgentWebEngine:
             structured_data=structured_data,
         )
 
-    def browser_open(self, url: str, actions: list[dict] | None = None, org_id: str = "development"):
+    def browser_open(self, url: str, actions: list[dict] | None = None, org_id: str = "development", credential_id: str | None = None):
         """Render a page through the isolated browser adapter and persist a trace."""
         started = time.time()
         execution_id = "exec_" + uuid.uuid4().hex[:16]
         try:
-            session = self.browser.open(url, actions)
+            credential = None
+            if credential_id:
+                credential = self.credentials.resolve(org_id, credential_id)
+                if credential is None:
+                    raise ValueError("browser credential not found")
+            session = self.browser.open(url, actions, credential)
             self.traces.save(
                 execution_id,
                 [self._span("browser", "open", started, session.status, redact_url(url), f"{len(session.actions)} action(s)")],

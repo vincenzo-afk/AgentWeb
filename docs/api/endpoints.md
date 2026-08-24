@@ -11,7 +11,7 @@ Base URL: `https://api.agentweb.dev/v1`
 | DELETE | `/observe/{id}` | Cancel a monitor; supports idempotency |
 | POST | `/search` | Low-level search |
 | POST | `/crawl` | Low-level crawl |
-| POST | `/browser/sessions` | Open a browser session |
+| POST | `/browser/sessions` | Open a browser session; may use an opaque encrypted-credential reference |
 | POST | `/extract` | Structured extraction from a page or document |
 | GET | `/memory/{target}` | Retrieve stored snapshots for a target |
 | GET | `/memory/{target}/diff` | Compute diff between snapshots |
@@ -19,6 +19,9 @@ Base URL: `https://api.agentweb.dev/v1`
 | GET | `/admin/keys` | List redacted API keys with cursor pagination |
 | POST | `/admin/keys` | Create an API key with idempotency support |
 | DELETE | `/admin/keys/{id}` | Revoke an API key with idempotency support |
+| GET | `/admin/browser-credentials` | List non-secret browser credential metadata |
+| POST | `/admin/browser-credentials` | Create an encrypted browser credential; supports idempotency |
+| DELETE | `/admin/browser-credentials/{id}` | Revoke an encrypted browser credential with idempotency support |
 | GET | `/admin/audit` | List immutable security events with cursor pagination and optional action/actor/target/time-range filters |
 | GET | `/admin/usage` | View organization usage and estimated billing |
 | DELETE | `/admin/data` | Delete organization-owned snapshots and execution traces; supports idempotency |

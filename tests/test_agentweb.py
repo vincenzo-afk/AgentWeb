@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 from agentweb.alerting import DeliveryResult, signature
 from agentweb.api import create_server
 from agentweb.auth import Authenticator, KeyStore, RateLimiter
+from agentweb.browser import BrowserEngine
+from agentweb.credentials import BrowserCredentialStore
 from agentweb.engine import AgentWebEngine
 from agentweb.errors import AuthenticationError, BrowserUnavailableError, PermissionError
 from agentweb.fetch import html_to_text
@@ -31,6 +33,7 @@ from agentweb.search import JsonSearchProvider, SearchProviderConfig, search
 from agentweb.scheduler import Scheduler
 from agentweb.synthesis import synthesize
 from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
+from cryptography.fernet import Fernet
 from agentweb.normalizer import normalize
 from agentweb.parser import parse
 from agentweb.ranking import RankedSource, rank
@@ -74,6 +77,7 @@ class AgentWebTests(unittest.TestCase):
         os.environ.pop("AGENTWEB_SEARCH_ENDPOINT", None)
         os.environ.pop("AGENTWEB_SEARCH_API_KEY", None)
         os.environ.pop("AGENTWEB_SEARCH_TIMEOUT_SECONDS", None)
+        os.environ.pop("AGENTWEB_BROWSER_CREDENTIAL_KEY", None)
         self.fixture.shutdown()
         self.fixture.server_close()
         self.temp_dir.cleanup()
@@ -99,6 +103,40 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(result.pages[0].depth, 0)
         self.assertEqual(result.pages[1].depth, 1)
         self.assertFalse(result.truncated)
+
+    def test_browser_credentials_are_encrypted_scoped_and_revocable(self):
+        key = Fernet.generate_key().decode()
+        store = BrowserCredentialStore(Path(self.temp_dir.name) / "credentials.sqlite3", MappingSecretProvider({"AGENTWEB_BROWSER_CREDENTIAL_KEY": key}))
+        created = store.create("org-a", "shop", "alice@example.com", "password-123", "operator")
+        self.assertNotIn("password-123", json.dumps(created))
+        self.assertEqual(store.resolve("org-a", created["id"]), {"username": "alice@example.com", "secret": "password-123"})
+        self.assertIsNone(store.resolve("org-b", created["id"]))
+        self.assertNotIn("password-123", json.dumps(store.list("org-a")))
+        with sqlite3.connect(store.path) as connection:
+            encrypted = connection.execute("SELECT encrypted_secret FROM browser_credentials WHERE id=?", (created["id"],)).fetchone()[0]
+        self.assertNotEqual(encrypted, "password-123")
+        self.assertTrue(store.revoke("org-a", created["id"], "operator"))
+        self.assertIsNone(store.resolve("org-a", created["id"]))
+
+    def test_browser_credential_action_scrubs_values_from_rendered_output(self):
+        original = FixtureHandler.body
+        FixtureHandler.body = b"<html><body><form><input id='username'><input id='password' type='password'></form></body></html>"
+        os.environ["AGENTWEB_CHROMIUM_PATH"] = "/usr/bin/chromium"
+        key = Fernet.generate_key().decode()
+        engine = AgentWebEngine(self.store, secret_provider=MappingSecretProvider({"AGENTWEB_BROWSER_CREDENTIAL_KEY": key}))
+        created = engine.credentials.create("development", "fixture", "alice@example.com", "password-123", "operator")
+        try:
+            session = engine.browser_open(
+                self.url,
+                [{"type": "fill_credential", "selector": "#username", "field": "username"}, {"type": "fill_credential", "selector": "#password", "field": "secret"}],
+                "development",
+                created["id"],
+            )
+            self.assertEqual(session.status, "complete")
+            self.assertNotIn("alice@example.com", json.dumps(session.to_dict()))
+            self.assertNotIn("password-123", json.dumps(session.to_dict()))
+        finally:
+            FixtureHandler.body = original
 
     def test_browser_renders_and_extracts(self):
         session = self.engine.browser_open(
@@ -652,6 +690,49 @@ class AgentWebTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_http_browser_credentials_are_metadata_only_and_revocable(self):
+        original = FixtureHandler.body
+        FixtureHandler.body = b"<html><body><form><input id='username'><input id='password' type='password'></form></body></html>"
+        os.environ["AGENTWEB_CHROMIUM_PATH"] = "/usr/bin/chromium"
+        os.environ["AGENTWEB_BROWSER_CREDENTIAL_KEY"] = Fernet.generate_key().decode()
+        data_path = Path(self.temp_dir.name) / "browser-credentials-api.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin_a = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
+        admin_b = server.authenticator.key_store.create_key("org-b", ["admin:*"])['secret']
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            headers = {"Authorization": f"Bearer {admin_a}", "Content-Type": "application/json"}
+            body = json.dumps({"label": "fixture", "username": "alice@example.com", "secret": "password-123"}).encode()
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-credentials", data=body, method="POST", headers=headers)) as response:
+                created = json.loads(response.read())
+            self.assertNotIn("secret", created)
+            self.assertNotIn("password-123", json.dumps(created))
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-credentials", headers={"Authorization": f"Bearer {admin_a}"})) as response:
+                listing = json.loads(response.read())
+            self.assertEqual(len(listing["data"]), 1)
+            self.assertNotIn("password-123", json.dumps(listing))
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-credentials", headers={"Authorization": f"Bearer {admin_b}"})) as response:
+                other_listing = json.loads(response.read())
+            self.assertEqual(other_listing["data"], [])
+            session_body = json.dumps({"url": self.url, "credential_id": created["id"], "actions": [{"type": "fill_credential", "selector": "#username", "field": "username"}, {"type": "fill_credential", "selector": "#password", "field": "secret"}]}).encode()
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/browser/sessions", data=session_body, method="POST", headers=headers)) as response:
+                session = json.loads(response.read())
+            self.assertNotIn("password-123", json.dumps(session))
+            audit_request = Request(f"http://127.0.0.1:{server.server_port}/admin/audit?action=browser_credential.created", headers={"Authorization": f"Bearer {admin_a}"})
+            with urlopen(audit_request) as response:
+                audit = json.loads(response.read())
+            self.assertNotIn("password-123", json.dumps(audit))
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-credentials/{created['id']}", method="DELETE", headers={"Authorization": f"Bearer {admin_a}", "Idempotency-Key": "revoke-credential-1"})) as response:
+                self.assertEqual(response.status, 204)
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-credentials/{created['id']}", method="DELETE", headers={"Authorization": f"Bearer {admin_a}"}))
+            self.assertEqual(raised.exception.code, 404)
+        finally:
+            FixtureHandler.body = original
+            server.shutdown()
+            server.server_close()
+
     def test_http_browser_route_returns_rendered_session(self):
         os.environ["AGENTWEB_CHROMIUM_PATH"] = "/usr/bin/chromium"
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "browser.sqlite3"))
@@ -962,7 +1043,6 @@ class AgentWebTests(unittest.TestCase):
             server.server_close()
 
     def test_browser_worker_pool_rejects_capacity_overflow(self):
-        from agentweb.browser import BrowserEngine
         browser = BrowserEngine(max_workers=1, session_timeout=0.01)
         with browser._worker_slot():
             with self.assertRaises(BrowserUnavailableError):

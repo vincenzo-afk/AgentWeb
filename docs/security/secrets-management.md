@@ -18,4 +18,4 @@ In development, the `env` provider is available for local compatibility. In stag
 
 ## Credentials passed to browser workflows
 
-If a [browser workflow](../guides/using-browser-workflows.md) needs to authenticate against a target site on your behalf, pass credentials via the dedicated secure credential mechanism rather than embedding them in `actions` payloads or task descriptions, so they aren't captured in logs or execution graphs.
+If a [browser workflow](../guides/using-browser-workflows.md) needs to authenticate against a target site on your behalf, create a credential through `POST /admin/browser-credentials` and pass only its opaque `credential_id` to the browser session. The secret is encrypted at rest with the provider-backed `AGENTWEB_BROWSER_CREDENTIAL_KEY`; `GET /admin/browser-credentials` returns metadata only and `DELETE /admin/browser-credentials/{id}` revokes access. Raw credential values are not accepted in browser actions, responses, logs, or execution graphs.

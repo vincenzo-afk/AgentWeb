@@ -79,7 +79,7 @@ class BrowserEngine:
                 return path
         return None
 
-    def open(self, url: str, actions: list[dict] | None = None) -> BrowserSession:
+    def open(self, url: str, actions: list[dict] | None = None, credential: dict[str, str] | None = None) -> BrowserSession:
         """Render a URL and run documented actions, returning partial results on action failure."""
         validate_url(url)
         requested_url = url
@@ -152,7 +152,7 @@ class BrowserEngine:
                     last_error: Exception | None = None
                     for attempt in range(2):
                         try:
-                            self._run_action(page, action)
+                            self._run_action(page, action, credential)
                             session.actions.append({"index": index, "type": action_type, "status": "complete"})
                             last_error = None
                             break
@@ -162,25 +162,25 @@ class BrowserEngine:
                             last_error = error
                     if last_error is not None:
                         session.status = "partial"
-                        session.error = redact_text(f"action {index} ({action_type}) failed after retry: {last_error}")
+                        session.error = self._scrub(redact_text(f"action {index} ({action_type}) failed after retry: {last_error}"), credential)
                         session.warnings.append(session.error)
                         break
-                session.title = page.title()
+                session.title = self._scrub(page.title(), credential)
                 full_text = page.locator("body").inner_text(timeout=int(self.action_timeout * 1000))
                 full_html = page.content()
-                session.text = full_text[:500_000]
-                session.html = full_html[:2_000_000]
+                session.text = self._scrub(full_text, credential)[:500_000]
+                session.html = self._scrub(full_html, credential)[:2_000_000]
                 if len(full_text) > len(session.text) or len(full_html) > len(session.html):
                     session.warnings.append("browser output was truncated at the configured size limit")
-                session.extracted = list(self._extracted_for_page(page))
+                session.extracted = self._scrub(list(self._extracted_for_page(page)), credential)
             except PlaywrightTimeoutError as error:
                 session.status = "partial"
-                session.error = redact_text(f"browser timeout: {error}")
+                session.error = self._scrub(redact_text(f"browser timeout: {error}"), credential)
                 session.warnings.append(session.error)
             except BrowserTimeoutError:
                 raise
             except Exception as error:
-                raise BrowserActionError(redact_text(str(error))) from error
+                raise BrowserActionError(self._scrub(redact_text(str(error)), credential)) from error
             finally:
                 if context is not None:
                     context.close()
@@ -188,7 +188,21 @@ class BrowserEngine:
                     browser.close()
         return session
 
-    def _run_action(self, page, action: dict) -> None:
+    @staticmethod
+    def _scrub(value, credential):
+        if isinstance(value, dict):
+            return {key: BrowserEngine._scrub(item, credential) for key, item in value.items()}
+        if isinstance(value, list):
+            return [BrowserEngine._scrub(item, credential) for item in value]
+        if not isinstance(value, str):
+            return value
+        result = redact_text(value)
+        for material in ((credential or {}).get("username"), (credential or {}).get("secret")):
+            if material:
+                result = result.replace(material, "[REDACTED_CREDENTIAL]")
+        return result
+
+    def _run_action(self, page, action: dict, credential: dict[str, str] | None = None) -> None:
         action_type = str(action["type"])
         selector = action.get("selector")
         if action_type == "click":
@@ -209,6 +223,15 @@ class BrowserEngine:
             else:
                 amount = int(action.get("amount", 700))
                 page.mouse.wheel(0, amount)
+        elif action_type == "fill_credential":
+            if not selector:
+                raise BrowserActionError("fill_credential requires selector")
+            if not credential:
+                raise BrowserActionError("fill_credential requires credential_id")
+            field = action.get("field")
+            if field not in {"username", "secret"}:
+                raise BrowserActionError("fill_credential field must be username or secret")
+            page.locator(selector).fill(credential[field], timeout=int(self.action_timeout * 1000))
         elif action_type == "extract":
             target = page.locator(selector or "body")
             extracted = {"selector": selector or "body", "text": target.inner_text(timeout=int(self.action_timeout * 1000))}

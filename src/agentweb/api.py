@@ -291,6 +291,10 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 keys, next_cursor, has_more = _page(self.authenticator.key_store.list_keys(principal.org_id), query)
                 self._send_json(HTTPStatus.OK, {"keys": keys, "data": keys, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
+            if path == "/admin/browser-credentials":
+                credentials, next_cursor, has_more = _page(self.engine.credentials.list(principal.org_id), query)
+                self._send_json(HTTPStatus.OK, {"credentials": credentials, "data": credentials, "next_cursor": next_cursor, "has_more": has_more}, request_id)
+                return
             if path == "/admin/audit":
                 since = _parse_audit_timestamp(query, "since")
                 until = _parse_audit_timestamp(query, "until")
@@ -328,7 +332,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
         path = urlparse(self.path).path
-        scope = "admin:*" if path.startswith(("/admin/keys/", "/admin/data")) else "observe:manage"
+        scope = "admin:*" if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/admin/data")) else "observe:manage"
         principal = self._authenticate(scope, request_id)
         if principal is None:
             return
@@ -336,7 +340,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json() if path == "/admin/data" else {}
-            if path.startswith(("/admin/keys/", "/observe/")) or path == "/admin/data":
+            if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/observe/")) or path == "/admin/data":
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
@@ -361,6 +365,13 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 key_id = path.rsplit("/", 1)[-1]
                 if not self.authenticator.revoke_key(principal.org_id, key_id, principal.key_id):
                     raise NotFoundError("API key not found")
+                self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.NO_CONTENT), None)
+                self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
+                return
+            if path.startswith("/admin/browser-credentials/"):
+                credential_id = path.rsplit("/", 1)[-1]
+                if not self.engine.credentials.revoke(principal.org_id, credential_id, principal.key_id):
+                    raise NotFoundError("browser credential not found")
                 self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.NO_CONTENT), None)
                 self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
                 return
@@ -390,6 +401,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             "/crawl": "search:read",
             "/browser/sessions": "browser:execute",
             "/admin/keys": "admin:*",
+            "/admin/browser-credentials": "admin:*",
         }.get(path)
         if scope is None:
             self._error(NotFoundError("route not found"), request_id)
@@ -401,7 +413,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json()
-            if path in {"/solve", "/observe", "/admin/keys"}:
+            if path in {"/solve", "/observe", "/admin/keys", "/admin/browser-credentials"}:
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
@@ -428,8 +440,17 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 )
                 response_payload = result.to_dict()
             elif path == "/browser/sessions":
-                session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id)
+                session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id, payload.get("credential_id"))
                 response_payload = session.to_dict()
+            elif path == "/admin/browser-credentials":
+                response_status = HTTPStatus.CREATED
+                response_payload = self.engine.credentials.create(
+                    principal.org_id,
+                    payload.get("label"),
+                    payload.get("username"),
+                    payload.get("secret"),
+                    principal.key_id,
+                )
             else:
                 response_status = HTTPStatus.CREATED
                 response_payload = self.authenticator.key_store.create_key(principal.org_id, payload.get("scopes", []), principal.key_id)

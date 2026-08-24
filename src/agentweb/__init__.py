@@ -2,6 +2,7 @@
 
 from .api import create_server
 from .browser import BrowserEngine, BrowserSession
+from .credentials import BrowserCredentialStore
 from .engine import AgentWebEngine
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry
@@ -16,6 +17,7 @@ __all__ = [
     "MetricStore",
     "MetricsRegistry",
     "purge_retention",
+    "BrowserCredentialStore",
     "BrowserEngine",
     "BrowserSession",
     "JsonSearchProvider",
@@ -36,4 +38,4 @@ __all__ = [
     "build_search_provider",
     "search",
 ]
-__version__ = "0.10.0"
+__version__ = "0.11.0"

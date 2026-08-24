@@ -5,8 +5,10 @@ Rendered, interactive page access for JS-heavy or flow-dependent pages. See [doc
 
 ## Interface
 ```
-browser.open(url: string, actions: Action[]) -> BrowserSession
+browser.open(url: string, actions: Action[], credential_id?: string) -> BrowserSession
 ```
+
+Authenticated flows use a tenant-scoped opaque `credential_id` created through the admin credential endpoint. The credential secret is encrypted at rest with the provider-backed `AGENTWEB_BROWSER_CREDENTIAL_KEY`, resolved only for the isolated session, and scrubbed from output, traces, and errors. The only credential action is `fill_credential`, with `field` set to `username` or `secret`; raw credential values are rejected in actions.
 
 ## Escalation criteria (Router → Browser)
 - Static fetch returns content that doesn't match expected schema/structure.

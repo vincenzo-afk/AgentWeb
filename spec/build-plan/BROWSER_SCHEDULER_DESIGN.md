@@ -6,9 +6,9 @@ This build slice adds rendered browser execution and durable scheduled monitor c
 
 The browser adapter is optional at import time and uses Playwright against a system Chromium binary when available. The core package remains dependency-light; browser-enabled environments install the optional browser extra and provide Chromium through the environment rather than downloading a proprietary runtime as part of the repository.
 
-Each `open` call creates a fresh browser context. Cookies, storage, cache, and session state are not shared between calls. The target URL is passed through the existing Trust Engine before rendering. The context routes outbound requests so the target origin and same-origin resources are allowed while cross-origin HTTP(S) requests are aborted where feasible. Credentials are not accepted in the action payload and are never written to traces.
+Each `open` call creates a fresh browser context. Cookies, storage, cache, and session state are not shared between calls. The target URL is passed through the existing Trust Engine before rendering. The context routes outbound requests so the target origin and same-origin resources are allowed while cross-origin HTTP(S) requests are aborted where feasible. Raw credentials are not accepted in action payloads. An administrator may create a tenant-scoped credential through the dedicated API; its secret is encrypted at rest with a provider-backed key, resolved only for the request, and never written to traces, logs, or browser output.
 
-Action support is intentionally limited to the documented primitives: `click`, `type`, `wait_for`, `scroll`, and `extract`. Every action has a 30-second timeout; the full session has a 90-second deadline. Failed actions are retried once, then returned as a structured partial result with the actions that succeeded and a warning describing the failure.
+Action support is intentionally limited to the documented primitives: `click`, `type`, `wait_for`, `scroll`, `extract`, and `fill_credential` (which accepts only the opaque credential reference and a `username` or `secret` field). Every action has a 30-second timeout; the full session has a 90-second deadline. Failed actions are retried once, then returned as a structured partial result with the actions that succeeded and a warning describing the failure.
 
 ## Production scheduler
 
@@ -26,4 +26,4 @@ SQLite remains the default local implementation. Distributed mode is explicit, r
 
 ## Explicit non-goals
 
-This slice still does not implement CAPTCHA solving, MFA, authenticated credential storage, arbitrary JavaScript injection, cross-organization browser state, a multi-process browser pool, graph reasoning, planner/execute APIs, or workflow automation. Those remain separate security, product, or roadmap decisions.
+This slice still does not implement CAPTCHA solving, MFA, arbitrary JavaScript injection, cross-organization browser state, a multi-process browser pool, graph reasoning, planner/execute APIs, or workflow automation. Credential storage is limited to encrypted username/secret pairs and does not attempt to automate MFA or bypass target-site controls.

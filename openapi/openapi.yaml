@@ -296,6 +296,54 @@ paths:
           description: API key revoked
         '404':
           $ref: '#/components/responses/BadRequest'
+  /admin/browser-credentials:
+    get:
+      summary: List non-secret browser credential metadata for the organization
+      operationId: listBrowserCredentials
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Browser credential metadata without secret values
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserCredentialPage'
+    post:
+      summary: Create an encrypted browser credential for the organization
+      operationId: createBrowserCredential
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserCredentialCreate'
+      responses:
+        '201':
+          description: Created credential metadata; the secret is never returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserCredential'
+  /admin/browser-credentials/{id}:
+    delete:
+      summary: Revoke an encrypted browser credential owned by the organization
+      operationId: revokeBrowserCredential
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Browser credential revoked
+        '404':
+          $ref: '#/components/responses/BadRequest'
   /admin/audit:
     get:
       summary: Read immutable security audit events for the organization
@@ -654,6 +702,57 @@ components:
             secret:
               type: string
               description: Plaintext secret returned only once at creation.
+    BrowserCredential:
+      type: object
+      required: [id, org_id, label, username, created_at, revoked_at]
+      properties:
+        id:
+          type: string
+        org_id:
+          type: string
+        label:
+          type: string
+        username:
+          type: string
+        created_at:
+          type: number
+        revoked_at:
+          type: number
+          nullable: true
+    BrowserCredentialCreate:
+      type: object
+      required: [label, username, secret]
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        username:
+          type: string
+          minLength: 1
+          maxLength: 320
+        secret:
+          type: string
+          minLength: 1
+          maxLength: 10000
+    BrowserCredentialPage:
+      type: object
+      required: [credentials, data, next_cursor, has_more]
+      properties:
+        credentials:
+          type: array
+          items:
+            $ref: '#/components/schemas/BrowserCredential'
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BrowserCredential'
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     BrowserRequest:
       type: object
       required: [url]
@@ -661,6 +760,9 @@ components:
         url:
           type: string
           format: uri
+        credential_id:
+          type: string
+          description: Opaque credential ID; resolved only for this tenant-scoped browser session.
         actions:
           type: array
           maxItems: 20
@@ -670,11 +772,14 @@ components:
             properties:
               type:
                 type: string
-                enum: [click, type, wait_for, scroll, extract]
+                enum: [click, type, wait_for, scroll, extract, fill_credential]
               selector:
                 type: string
               text:
                 type: string
+              field:
+                type: string
+                enum: [username, secret]
               attribute:
                 type: string
               state:
