@@ -35,18 +35,20 @@ class AgentWebEngine:
         memory: MemoryStore | None = None,
         secret_provider: SecretProvider | None = None,
         search_provider: SearchProvider | None = None,
+        queue_coordinator: object | None = None,
     ) -> None:
         self.memory = memory or MemoryStore()
         self.metrics = MetricsRegistry()
         self.secret_provider = secret_provider or build_provider()
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
+        self.queue_coordinator = queue_coordinator
         self.traces = TraceStore(self.memory.path)
         self.trust_engine = TrustEngine(
             blocked_domains={domain for domain in os.getenv("AGENTWEB_BLOCKED_DOMAINS", "").split(",") if domain}
         )
         self.crawler = Crawler(self.trust_engine)
         self.browser = BrowserEngine(self.trust_engine)
-        self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook)
+        self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook, coordinator=queue_coordinator)
 
     @staticmethod
     def _trust_score(url: str, title: str = "") -> float:
@@ -312,7 +314,14 @@ class AgentWebEngine:
             webhook_url=webhook_url,
             org_id=org_id,
         )
-        self.memory.create_monitor(monitor)
+        local_job_id = self.memory.create_monitor(monitor)
+        if self.queue_coordinator is not None:
+            try:
+                self.queue_coordinator.sync_monitor(monitor)
+                self.queue_coordinator.enqueue_monitor_job(local_job_id, org_id, monitor.id, frequency)
+            except Exception:
+                self.memory.delete_monitor(monitor.id, org_id)
+                raise
         self.traces.save(monitor.id, [self._span("monitor", "create", time.time(), "complete", task, monitor.id)], org_id=org_id)
         return monitor
 
@@ -402,12 +411,28 @@ class AgentWebEngine:
                             "to_hash": self.memory.get_latest(monitor.target_url, monitor.org_id)["content_hash"],
                         },
                     }
+                    delivery_job_id = "job_" + uuid.uuid4().hex[:16]
                     monitor.last_delivery_id = self.memory.enqueue_webhook_delivery(
-                        monitor.org_id, monitor.id, monitor.webhook_url, payload
+                        monitor.org_id, monitor.id, monitor.webhook_url, payload, job_id=delivery_job_id
                     )
-                    monitor.last_delivery_status = "pending"
-                    monitor.last_delivery_attempts = 0
-                    monitor.last_delivery_error = None
+                    if self.queue_coordinator is not None:
+                        try:
+                            self.queue_coordinator.enqueue_webhook_delivery(
+                                delivery_job_id, monitor.org_id, monitor.id, monitor.webhook_url, payload
+                            )
+                        except Exception as error:
+                            self.memory.cancel_job(delivery_job_id, monitor.org_id)
+                            monitor.last_delivery_status = "blocked"
+                            monitor.last_delivery_error = "distributed queue unavailable"
+                            monitor.last_error = redact_text(str(error))
+                        else:
+                            monitor.last_delivery_status = "pending"
+                            monitor.last_delivery_attempts = 0
+                            monitor.last_delivery_error = None
+                    else:
+                        monitor.last_delivery_status = "pending"
+                        monitor.last_delivery_attempts = 0
+                        monitor.last_delivery_error = None
         self.memory.update_monitor(monitor)
         self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, f"{monitor.last_event}; policy={change_policy}; snapshot_changed={snapshot_changed}")], org_id=monitor.org_id)
         self.memory.record_usage(monitor.org_id, "monitor_checks")

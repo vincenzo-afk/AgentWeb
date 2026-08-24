@@ -74,6 +74,7 @@ class MemoryStore:
                     status TEXT NOT NULL,
                     run_at REAL NOT NULL,
                     lease_until REAL,
+                    lease_token TEXT,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     max_attempts INTEGER NOT NULL DEFAULT 5,
                     last_error TEXT,
@@ -147,6 +148,9 @@ class MemoryStore:
             job_columns = {row[1] for row in connection.execute("PRAGMA table_info(scheduler_jobs)")}
             if job_columns and "org_id" not in job_columns:
                 connection.execute("ALTER TABLE scheduler_jobs ADD COLUMN org_id TEXT NOT NULL DEFAULT 'legacy'")
+            job_columns = {row[1] for row in connection.execute("PRAGMA table_info(scheduler_jobs)")}
+            if job_columns and "lease_token" not in job_columns:
+                connection.execute("ALTER TABLE scheduler_jobs ADD COLUMN lease_token TEXT")
             if legacy_snapshots:
                 legacy_columns = {row[1] for row in connection.execute("PRAGMA table_info(snapshots_legacy)")}
                 target_column = "target" if "target" in legacy_columns else "key"
@@ -330,8 +334,9 @@ class MemoryStore:
     def _frequency_priority(frequency: str) -> int:
         return {"minutely": 30, "hourly": 20, "daily": 10}.get(frequency, 10)
 
-    def create_monitor(self, monitor: Monitor) -> None:
+    def create_monitor(self, monitor: Monitor) -> str:
         now = time.time()
+        job_id = "job_" + uuid.uuid4().hex[:16]
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO monitors(id, org_id, task, status, frequency, target_url, webhook_url, "
@@ -342,8 +347,9 @@ class MemoryStore:
             connection.execute(
                 "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, lease_until, "
                 "attempts, max_attempts, last_error, created_at, updated_at) VALUES(?, ?, 'monitor_check', ?, ?, 'pending', ?, NULL, 0, 5, NULL, ?, ?)",
-                ("job_" + uuid.uuid4().hex[:16], monitor.org_id, monitor.id, self._frequency_priority(monitor.frequency), now, now, now),
+                (job_id, monitor.org_id, monitor.id, self._frequency_priority(monitor.frequency), now, now, now),
             )
+        return job_id
 
     def list_monitors(self, org_id: str = "development") -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -391,9 +397,10 @@ class MemoryStore:
         payload: dict[str, Any],
         max_attempts: int = 5,
         run_at: float | None = None,
+        job_id: str | None = None,
     ) -> str:
         now = time.time() if run_at is None else run_at
-        job_id = "job_" + uuid.uuid4().hex[:16]
+        job_id = job_id or ("job_" + uuid.uuid4().hex[:16])
         attempts = max(1, min(int(max_attempts), 5))
         with self._connect() as connection:
             connection.execute(
@@ -526,31 +533,39 @@ class MemoryStore:
                 connection.commit()
                 return None
             lease_until = now + lease_seconds
-            connection.execute("UPDATE scheduler_jobs SET status='leased', lease_until=?, attempts=attempts+1, updated_at=? WHERE id=?", (lease_until, now, row["id"]))
+            lease_token = "lease_" + uuid.uuid4().hex
+            connection.execute("UPDATE scheduler_jobs SET status='leased', lease_until=?, lease_token=?, attempts=attempts+1, updated_at=? WHERE id=? AND status='pending'", (lease_until, lease_token, now, row["id"]))
             claimed = dict(row)
-            claimed.update(status="leased", lease_until=lease_until, attempts=int(row["attempts"]) + 1)
+            claimed.update(status="leased", lease_until=lease_until, lease_token=lease_token, attempts=int(row["attempts"]) + 1)
             connection.commit()
         return claimed
 
-    def acknowledge_job(self, job_id: str, frequency: str, now: float | None = None, org_id: str | None = None) -> None:
+    def acknowledge_job(self, job_id: str, frequency: str, now: float | None = None, org_id: str | None = None, lease_token: str | None = None) -> bool:
         now = time.time() if now is None else now
         next_run = now + self._frequency_seconds(frequency)
-        query = "UPDATE scheduler_jobs SET status='pending', run_at=?, lease_until=NULL, attempts=0, last_error=NULL, priority=?, updated_at=? WHERE id=?"
+        query = "UPDATE scheduler_jobs SET status='pending', run_at=?, lease_until=NULL, lease_token=NULL, attempts=0, last_error=NULL, priority=?, updated_at=? WHERE id=? AND status='leased'"
         params: list[Any] = [next_run, self._frequency_priority(frequency), now, job_id]
         if org_id is not None:
             query += " AND org_id=?"
             params.append(org_id)
+        if lease_token is not None:
+            query += " AND lease_token=?"
+            params.append(lease_token)
         with self._connect() as connection:
-            connection.execute(query, tuple(params))
+            cursor = connection.execute(query, tuple(params))
+        return cursor.rowcount > 0
 
-    def fail_job(self, job_id: str, error: str, now: float | None = None, org_id: str | None = None, retry_delay: float | None = None) -> str:
+    def fail_job(self, job_id: str, error: str, now: float | None = None, org_id: str | None = None, retry_delay: float | None = None, lease_token: str | None = None) -> str:
         now = time.time() if now is None else now
         with self._connect() as connection:
-            query = "SELECT attempts, max_attempts FROM scheduler_jobs WHERE id=?"
+            query = "SELECT attempts, max_attempts FROM scheduler_jobs WHERE id=? AND status='leased'"
             params: list[Any] = [job_id]
             if org_id is not None:
                 query += " AND org_id=?"
                 params.append(org_id)
+            if lease_token is not None:
+                query += " AND lease_token=?"
+                params.append(lease_token)
             row = connection.execute(query, tuple(params)).fetchone()
             if not row:
                 return "missing"
@@ -558,20 +573,26 @@ class MemoryStore:
             status = "dead_letter" if attempts >= int(row["max_attempts"]) else "pending"
             default_delay = min(0.5 * (2 ** max(0, attempts - 1)), 30.0)
             run_at = now if status == "dead_letter" else now + (default_delay if retry_delay is None else max(0.0, float(retry_delay)))
-            update = "UPDATE scheduler_jobs SET status=?, run_at=?, lease_until=NULL, last_error=?, updated_at=? WHERE id=?"
+            update = "UPDATE scheduler_jobs SET status=?, run_at=?, lease_until=NULL, lease_token=NULL, last_error=?, updated_at=? WHERE id=? AND status='leased'"
             update_params: list[Any] = [status, run_at, error[:500], now, job_id]
             if org_id is not None:
                 update += " AND org_id=?"
                 update_params.append(org_id)
+            if lease_token is not None:
+                update += " AND lease_token=?"
+                update_params.append(lease_token)
             connection.execute(update, tuple(update_params))
         return status
 
-    def cancel_job(self, job_id: str, org_id: str | None = None) -> bool:
-        query = "UPDATE scheduler_jobs SET status='cancelled', lease_until=NULL, updated_at=? WHERE id=?"
+    def cancel_job(self, job_id: str, org_id: str | None = None, lease_token: str | None = None) -> bool:
+        query = "UPDATE scheduler_jobs SET status='cancelled', lease_until=NULL, lease_token=NULL, updated_at=? WHERE id=?"
         params: list[Any] = [time.time(), job_id]
         if org_id is not None:
             query += " AND org_id=?"
             params.append(org_id)
+        if lease_token is not None:
+            query += " AND status='leased' AND lease_token=?"
+            params.append(lease_token)
         with self._connect() as connection:
             cursor = connection.execute(query, tuple(params))
         return cursor.rowcount > 0

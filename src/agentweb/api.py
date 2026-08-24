@@ -18,6 +18,7 @@ from .auth import Authenticator, RateLimiter
 from .engine import AgentWebEngine
 from .errors import AgentWebError, ConflictError, InvalidRequestError, NotFoundError, PermissionError
 from .redaction import redact_url
+from .rdbms import DatabaseConfig, open_distributed_queue
 from .search import search
 from .secrets import build_provider
 
@@ -58,7 +59,7 @@ def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, b
 
 
 class AgentWebHandler(BaseHTTPRequestHandler):
-    server_version = "AgentWeb/0.9.0"
+    server_version = "AgentWeb/0.10.0"
 
     @property
     def engine(self) -> AgentWebEngine:
@@ -268,7 +269,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 return
             if path == "/admin/metrics":
                 metrics = self.metrics.snapshot(principal.org_id)
-                metrics["gauges"].update({f"queue_{key}": value for key, value in self.engine.memory.queue_summary(principal.org_id).items()})
+                queue_store = self.engine.scheduler.queue_store
+                metrics["gauges"].update({f"queue_{key}": value for key, value in queue_store.queue_summary(principal.org_id).items()})
                 self._send_json(HTTPStatus.OK, metrics, request_id)
                 return
             if path == "/admin/usage":
@@ -415,7 +417,9 @@ def create_server(host: str = "127.0.0.1", port: int = 8000, data_path: str = "a
     server = ThreadingHTTPServer((host, port), AgentWebHandler)
     store = MemoryStore(data_path)
     provider = build_provider()
-    server.engine = AgentWebEngine(store, secret_provider=provider)  # type: ignore[attr-defined]
+    coordinator = open_distributed_queue(DatabaseConfig.from_environment(provider))
+    server.engine = AgentWebEngine(store, secret_provider=provider, queue_coordinator=coordinator)  # type: ignore[attr-defined]
+    server.queue_coordinator = coordinator  # type: ignore[attr-defined]
     server.authenticator = Authenticator(data_path, provider=provider)  # type: ignore[attr-defined]
     server.rate_limiter = RateLimiter()  # type: ignore[attr-defined]
     return server

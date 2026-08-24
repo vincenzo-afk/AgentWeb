@@ -23,7 +23,7 @@ RELATIONAL_TABLES = {
         "last_delivery_attempts", "last_delivery_error",
     ],
     "scheduler_jobs": [
-        "id", "org_id", "job_type", "monitor_id", "priority", "status", "run_at", "lease_until",
+        "id", "org_id", "job_type", "monitor_id", "priority", "status", "run_at", "lease_until", "lease_token",
         "attempts", "max_attempts", "last_error", "created_at", "updated_at",
     ],
     "audit_events": ["id", "org_id", "actor", "action", "target", "timestamp", "metadata"],
@@ -31,6 +31,7 @@ RELATIONAL_TABLES = {
     "usage_records": ["id", "org_id", "period", "mode", "count", "cost"],
     "webhook_deliveries": ["job_id", "org_id", "monitor_id", "url", "payload_json", "status", "attempts", "max_attempts", "last_status_code", "last_error", "created_at", "updated_at", "delivered_at"],
     "webhook_delivery_attempts": ["id", "job_id", "org_id", "attempt", "delivered", "status_code", "error", "attempted_at"],
+    "queue_rate_limits": ["org_id", "bucket", "tokens", "capacity", "refill_per_second", "updated_at"],
 }
 
 _JSONB_COLUMNS = {( "api_keys", "scope"), ("audit_events", "metadata"), ("webhook_deliveries", "payload_json")}
@@ -44,6 +45,7 @@ _REQUIRED_COLUMNS = {
     "usage_records": ("id", "org_id", "period", "mode"),
     "webhook_deliveries": ("job_id", "org_id", "monitor_id", "url", "payload_json", "status"),
     "webhook_delivery_attempts": ("id", "job_id", "org_id", "attempt", "delivered"),
+    "queue_rate_limits": ("org_id", "bucket", "tokens", "capacity", "refill_per_second"),
 }
 _TIMESTAMP_COLUMNS = {
     "created_at", "completed_at", "last_checked_at", "last_change_at", "run_at", "lease_until",

@@ -6,7 +6,7 @@ from .engine import AgentWebEngine
 from .maintenance import purge_retention
 from .metrics import MetricsRegistry
 from .scheduler import Scheduler
-from .rdbms import DatabaseConfig, PostgresRelationalStore, open_relational_store
+from .rdbms import DatabaseConfig, PostgresDistributedQueue, PostgresRelationalStore, open_distributed_queue, open_relational_store
 from .search import JsonSearchProvider, SearchProviderConfig, SearchProviderError, build_search_provider, search
 from .secrets import MappingSecretProvider, SecretProviderConfig, build_provider
 from .synthesis import SynthesisResult, synthesize
@@ -20,6 +20,7 @@ __all__ = [
     "JsonSearchProvider",
     "DatabaseConfig",
     "MappingSecretProvider",
+    "PostgresDistributedQueue",
     "PostgresRelationalStore",
     "Scheduler",
     "SearchProviderConfig",
@@ -28,9 +29,10 @@ __all__ = [
     "SynthesisResult",
     "build_provider",
     "create_server",
+    "open_distributed_queue",
     "open_relational_store",
     "synthesize",
     "build_search_provider",
     "search",
 ]
-__version__ = "0.9.0"
+__version__ = "0.10.0"

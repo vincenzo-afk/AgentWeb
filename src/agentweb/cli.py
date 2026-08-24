@@ -10,6 +10,8 @@ from .api import create_server
 from .engine import AgentWebEngine
 from .maintenance import purge_retention
 from .memory import MemoryStore
+from .rdbms import DatabaseConfig, open_distributed_queue
+from .secrets import build_provider
 
 
 def _migration_main(argv: list[str]) -> None:
@@ -65,7 +67,9 @@ def main() -> None:
     parser.add_argument("--poll", type=float, default=1.0, help="With --worker, seconds between due-job polls (default: 1).")
     args = parser.parse_args()
     if args.worker:
-        engine = AgentWebEngine(MemoryStore(args.data))
+        provider = build_provider()
+        coordinator = open_distributed_queue(DatabaseConfig.from_environment(provider))
+        engine = AgentWebEngine(MemoryStore(args.data), secret_provider=provider, queue_coordinator=coordinator)
         engine.scheduler.poll_seconds = max(0.1, args.poll)
         if args.once:
             print(json.dumps(engine.scheduler.run_once()))

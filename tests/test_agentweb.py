@@ -22,9 +22,10 @@ from agentweb.errors import AuthenticationError, BrowserUnavailableError, Permis
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
-from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError
+from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError, POSTGRES_SCHEMA, open_distributed_queue
 from agentweb.trace import Span
 from agentweb.search import JsonSearchProvider, SearchProviderConfig, search
+from agentweb.scheduler import Scheduler
 from agentweb.synthesis import synthesize
 from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
 from agentweb.normalizer import normalize
@@ -317,6 +318,52 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(result.last_event, "check_failed")
         self.assertIsNotNone(result.last_error)
 
+    def test_scheduler_lease_token_blocks_stale_worker_after_reclaim(self):
+        monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
+        first = self.store.claim_due_job(time.time(), lease_seconds=1, org_id="development")
+        self.assertIsNotNone(first)
+        second = self.store.claim_due_job(time.time() + 2, lease_seconds=1, org_id="development")
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first["lease_token"], second["lease_token"])
+        self.assertFalse(self.store.acknowledge_job(first["id"], "hourly", time.time() + 2, "development", first["lease_token"]))
+        self.assertTrue(self.store.acknowledge_job(second["id"], "hourly", time.time() + 2, "development", second["lease_token"]))
+
+    def test_scheduler_routes_claims_and_limits_through_coordinator(self):
+        monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
+        store = self.store
+
+        class Coordinator:
+            def __init__(self):
+                self.claimed = False
+                self.limited = False
+                self.acknowledged = False
+
+            def claim_due_job(self, now, lease_seconds):
+                self.claimed = True
+                return store.claim_due_job(now, lease_seconds, "development")
+
+            def consume_rate_limit(self, org_id, bucket, cost, capacity, refill_per_second):
+                self.limited = self.limited or (org_id == "development" and bucket == "scheduled")
+                return {"remaining": capacity - cost, "reset": 0.0}
+
+            def acknowledge_job(self, job_id, frequency, now, org_id, lease_token):
+                self.acknowledged = True
+                return store.acknowledge_job(job_id, frequency, now, org_id, lease_token)
+
+            def fail_job(self, *args, **kwargs):
+                return store.fail_job(*args, **kwargs)
+
+            def cancel_job(self, *args, **kwargs):
+                return store.cancel_job(*args, **kwargs)
+
+        coordinator = Coordinator()
+        scheduler = Scheduler(store, self.engine.check_monitor, coordinator=coordinator)
+        result = scheduler.run_once(now=time.time() + 1)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertTrue(coordinator.claimed)
+        self.assertTrue(coordinator.limited)
+        self.assertTrue(coordinator.acknowledged)
+
     def test_scheduler_runs_due_monitor_and_reschedules(self):
         monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
         now = time.time() + 1
@@ -425,6 +472,17 @@ class AgentWebTests(unittest.TestCase):
         config = DatabaseConfig.from_environment(provider)
         self.assertEqual(config.driver, "postgres")
         self.assertEqual(config.pool_size, 4)
+
+    def test_postgres_queue_schema_contains_distributed_coordination_contract(self):
+        self.assertIn("lease_token VARCHAR(100)", POSTGRES_SCHEMA)
+        constants = " ".join(str(item) for item in __import__("agentweb.rdbms", fromlist=["PostgresDistributedQueue"]).PostgresDistributedQueue.claim_due_job.__code__.co_consts)
+        self.assertIn("FOR UPDATE SKIP LOCKED", constants)
+        self.assertIn("CREATE TABLE IF NOT EXISTS queue_rate_limits", POSTGRES_SCHEMA)
+
+    def test_distributed_queue_requires_postgresql_url(self):
+        with patch.dict(os.environ, {"AGENTWEB_DISTRIBUTED_QUEUE": "1"}, clear=False):
+            with self.assertRaises(DatabaseConfigurationError):
+                open_distributed_queue(DatabaseConfig("development", "sqlite:///local.sqlite3"))
 
     def test_production_database_requires_postgresql_url(self):
         os.environ["AGENTWEB_ENV"] = "production"

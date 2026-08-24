@@ -18,6 +18,12 @@ A worker claims one due job with a short lease inside a transaction, executes th
 
 The scheduler is exposed as a foreground worker and a one-shot `run_once` method. This supports container supervisors, systemd, or managed background processes without silently creating an unbounded thread in the HTTP API process. No scheduler run requires AI judgment; all behavior is deterministic and locally testable.
 
+## Distributed queue coordination
+
+When `AGENTWEB_DISTRIBUTED_QUEUE` is enabled, API and worker instances coordinate through the same PostgreSQL database. Due-job claims use `FOR UPDATE SKIP LOCKED`, expired leases are reclaimed, and every claim receives a unique lease token. Acknowledge, failure, and cancellation transitions require the active lease token, so a stale worker cannot mutate a job after another instance reclaims it. Organization-scoped token buckets for scheduled checks and webhook delivery are stored and consumed under row locks in PostgreSQL; rate-limit failures include a retry interval.
+
+SQLite remains the default local implementation. Distributed mode is explicit, requires a PostgreSQL `DATABASE_URL`, and does not claim full business-record runtime cutover: monitor and delivery state must still be available to the worker's configured local store until the broader relational runtime migration is completed. PostgreSQL bootstrap is idempotent, adds the coordination tables/columns, and the migration map carries lease tokens and limiter state.
+
 ## Explicit non-goals
 
-This slice does not implement CAPTCHA solving, MFA, authenticated credential storage, arbitrary JavaScript injection, cross-organization browser state, a distributed queue, or a multi-node lease coordinator. Those require additional security and deployment decisions beyond the current repository scope.
+This slice still does not implement CAPTCHA solving, MFA, authenticated credential storage, arbitrary JavaScript injection, cross-organization browser state, a multi-process browser pool, graph reasoning, planner/execute APIs, or workflow automation. Those remain separate security, product, or roadmap decisions.

@@ -8,15 +8,22 @@ staging or production image.
 from __future__ import annotations
 
 import contextlib
+import json
+import math
 import os
 import queue
 import sqlite3
 import threading
+import time
+import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlparse
 
+from .errors import RateLimitError
+from .redaction import redact_text
 from .secrets import SecretProvider, SecretProviderError, build_provider
 
 
@@ -83,6 +90,7 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
     status VARCHAR(32) NOT NULL,
     run_at TIMESTAMPTZ NOT NULL,
     lease_until TIMESTAMPTZ NULL,
+    lease_token VARCHAR(100) NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 5,
     last_error TEXT NULL,
@@ -90,6 +98,7 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(job_type, org_id, monitor_id)
 );
+ALTER TABLE scheduler_jobs ADD COLUMN IF NOT EXISTS lease_token VARCHAR(100) NULL;
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     job_id VARCHAR(100) PRIMARY KEY REFERENCES scheduler_jobs(id),
     org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
@@ -137,6 +146,16 @@ CREATE TABLE IF NOT EXISTS usage_records (
 CREATE INDEX IF NOT EXISTS idx_runs_org_created ON runs(org_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_monitors_org_status ON monitors(org_id, status);
 CREATE INDEX IF NOT EXISTS idx_scheduler_org_due ON scheduler_jobs(org_id, status, run_at, priority);
+CREATE TABLE IF NOT EXISTS queue_rate_limits (
+    org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
+    bucket VARCHAR(64) NOT NULL,
+    tokens DOUBLE PRECISION NOT NULL,
+    capacity DOUBLE PRECISION NOT NULL,
+    refill_per_second DOUBLE PRECISION NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (org_id, bucket)
+);
+CREATE INDEX IF NOT EXISTS idx_queue_rate_limits_updated ON queue_rate_limits(updated_at);
 CREATE INDEX IF NOT EXISTS idx_audit_org_time ON audit_events(org_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_usage_org_period ON usage_records(org_id, period);
 CREATE INDEX IF NOT EXISTS idx_api_keys_org_revoked ON api_keys(org_id, revoked_at);
@@ -294,6 +313,191 @@ class PostgresRelationalStore:
                     self._created = max(0, self._created - 1)
 
 
+class PostgresDistributedQueue(PostgresRelationalStore):
+    """PostgreSQL coordination backend for multi-instance scheduler workers.
+
+    Business records may remain on the local adapter during migration, but queue
+    ownership and limiter state are coordinated transactionally in PostgreSQL.
+    """
+
+    @staticmethod
+    def _timestamp(value: float | None) -> datetime:
+        return datetime.fromtimestamp(time.time() if value is None else value, tz=timezone.utc)
+
+    @staticmethod
+    def _epoch(value: Any) -> float:
+        if isinstance(value, datetime):
+            return value.timestamp()
+        return float(value)
+
+    @staticmethod
+    def _row_dict(cursor: Any, row: Any) -> dict[str, Any] | None:
+        if not row:
+            return None
+        return dict(zip([item.name for item in cursor.description], row))
+
+    def claim_due_job(self, now: float | None = None, lease_seconds: float = 120.0, org_id: str | None = None) -> dict[str, Any] | None:
+        current = self._timestamp(now)
+        token = "lease_" + uuid.uuid4().hex
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE scheduler_jobs SET status='pending', lease_until=NULL, lease_token=NULL, updated_at=%s "
+                    "WHERE status='leased' AND lease_until IS NOT NULL AND lease_until < %s",
+                    (current, current),
+                )
+                query = (
+                    "SELECT * FROM scheduler_jobs WHERE status='pending' AND run_at <= %s"
+                )
+                params: list[Any] = [current]
+                if org_id is not None:
+                    query += " AND org_id=%s"
+                    params.append(org_id)
+                query += " ORDER BY priority DESC, run_at ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                cursor.execute(query, tuple(params))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                selected = self._row_dict(cursor, row) or {}
+                lease_until = current.timestamp() + max(1.0, float(lease_seconds))
+                lease_until_dt = self._timestamp(lease_until)
+                cursor.execute(
+                    "UPDATE scheduler_jobs SET status='leased', lease_until=%s, lease_token=%s, attempts=attempts+1, updated_at=%s "
+                    "WHERE id=%s AND status='pending'",
+                    (lease_until_dt, token, current, selected["id"]),
+                )
+                selected.update(status="leased", lease_until=lease_until_dt, lease_token=token, attempts=int(selected.get("attempts", 0)) + 1)
+                return selected
+
+    def acknowledge_job(self, job_id: str, frequency: str, now: float | None = None, org_id: str | None = None, lease_token: str | None = None) -> bool:
+        if not lease_token:
+            return False
+        current = self._timestamp(now)
+        interval = {"minutely": 60, "hourly": 3600, "daily": 86400}.get(frequency, 3600)
+        priority = {"minutely": 30, "hourly": 20, "daily": 10}.get(frequency, 10)
+        query = "UPDATE scheduler_jobs SET status='pending', run_at=%s, lease_until=NULL, lease_token=NULL, attempts=0, last_error=NULL, priority=%s, updated_at=%s WHERE id=%s AND status='leased' AND lease_token=%s"
+        params: list[Any] = [self._timestamp(current.timestamp() + interval), priority, current, job_id, lease_token]
+        if org_id is not None:
+            query += " AND org_id=%s"
+            params.append(org_id)
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, tuple(params))
+                return cursor.rowcount > 0
+
+    def fail_job(self, job_id: str, error: str, now: float | None = None, org_id: str | None = None, retry_delay: float | None = None, lease_token: str | None = None) -> str:
+        if not lease_token:
+            return "missing"
+        current = self._timestamp(now)
+        message = redact_text(error)[:500]
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                query = "SELECT attempts, max_attempts FROM scheduler_jobs WHERE id=%s AND status='leased' AND lease_token=%s"
+                params: list[Any] = [job_id, lease_token]
+                if org_id is not None:
+                    query += " AND org_id=%s"
+                    params.append(org_id)
+                cursor.execute(query, tuple(params))
+                row = cursor.fetchone()
+                if not row:
+                    return "missing"
+                attempts, max_attempts = int(row[0]), int(row[1])
+                status = "dead_letter" if attempts >= max_attempts else "pending"
+                delay = 0.5 * (2 ** max(0, attempts - 1)) if retry_delay is None else max(0.0, float(retry_delay))
+                run_at = current if status == "dead_letter" else self._timestamp(current.timestamp() + min(delay, 30.0) if retry_delay is None else current.timestamp() + delay)
+                update = "UPDATE scheduler_jobs SET status=%s, run_at=%s, lease_until=NULL, lease_token=NULL, last_error=%s, updated_at=%s WHERE id=%s AND status='leased' AND lease_token=%s"
+                values: list[Any] = [status, run_at, message, current, job_id, lease_token]
+                if org_id is not None:
+                    update += " AND org_id=%s"
+                    values.append(org_id)
+                cursor.execute(update, tuple(values))
+                return status if cursor.rowcount else "missing"
+
+    def cancel_job(self, job_id: str, org_id: str | None = None, lease_token: str | None = None) -> bool:
+        query = "UPDATE scheduler_jobs SET status='cancelled', lease_until=NULL, lease_token=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=%s"
+        params: list[Any] = [job_id]
+        if org_id is not None:
+            query += " AND org_id=%s"
+            params.append(org_id)
+        if lease_token is not None:
+            query += " AND lease_token=%s"
+            params.append(lease_token)
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, tuple(params))
+                return cursor.rowcount > 0
+
+    def consume_rate_limit(self, org_id: str, bucket: str, cost: float, capacity: float, refill_per_second: float, now: float | None = None) -> dict[str, float]:
+        if cost <= 0 or capacity <= 0 or refill_per_second < 0:
+            raise ValueError("rate-limit parameters are invalid")
+        current = self._timestamp(now)
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO queue_rate_limits(org_id, bucket, tokens, capacity, refill_per_second, updated_at) VALUES(%s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, bucket) DO NOTHING",
+                    (org_id, bucket, capacity, capacity, refill_per_second, current),
+                )
+                cursor.execute("SELECT tokens, capacity, refill_per_second, updated_at FROM queue_rate_limits WHERE org_id=%s AND bucket=%s FOR UPDATE", (org_id, bucket))
+                row = cursor.fetchone()
+                if not row:
+                    raise RuntimeError("distributed rate-limit bucket was not created")
+                tokens, stored_capacity, refill, updated_at = float(row[0]), float(row[1]), float(row[2]), row[3]
+                elapsed = max(0.0, current.timestamp() - self._epoch(updated_at))
+                available = min(stored_capacity, tokens + elapsed * refill)
+                if available < cost:
+                    cursor.execute("UPDATE queue_rate_limits SET tokens=%s, updated_at=%s WHERE org_id=%s AND bucket=%s", (available, current, org_id, bucket))
+                    retry_after = math.ceil((cost - available) / refill) if refill > 0 else 3600
+                    raise RateLimitError("distributed queue rate limit exceeded", retry_after=max(1, retry_after))
+                remaining = available - cost
+                cursor.execute("UPDATE queue_rate_limits SET tokens=%s, updated_at=%s WHERE org_id=%s AND bucket=%s", (remaining, current, org_id, bucket))
+                return {"remaining": remaining, "reset": current.timestamp() + ((stored_capacity - remaining) / refill if refill > 0 else 0.0)}
+
+    def queue_summary(self, org_id: str) -> dict[str, int]:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT status, COUNT(*) FROM scheduler_jobs WHERE org_id=%s GROUP BY status", (org_id,))
+                rows = cursor.fetchall()
+                cursor.execute("SELECT COUNT(*) FROM scheduler_jobs WHERE org_id=%s AND status='pending' AND run_at <= CURRENT_TIMESTAMP", (org_id,))
+                due = cursor.fetchone()[0]
+        summary = {str(row[0]): int(row[1]) for row in rows}
+        summary["due"] = int(due)
+        return summary
+
+    def sync_monitor(self, record: Any) -> None:
+        org_id = str(record.org_id)
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO organizations(id, name) VALUES(%s, %s) ON CONFLICT (id) DO NOTHING", (org_id, org_id))
+                cursor.execute(
+                    "INSERT INTO monitors(id, org_id, task, status, frequency, target_url, webhook_url, last_checked_at, last_change_at, last_event, last_error) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, frequency=EXCLUDED.frequency, target_url=EXCLUDED.target_url, webhook_url=EXCLUDED.webhook_url",
+                    (record.id, org_id, record.task, record.status, record.frequency, record.target_url, record.webhook_url, record.last_checked_at, record.last_change_at, record.last_event, record.last_error),
+                )
+
+    def enqueue_monitor_job(self, job_id: str, org_id: str, monitor_id: str, frequency: str, run_at: float | None = None) -> None:
+        current = self._timestamp(run_at)
+        priority = {"minutely": 30, "hourly": 20, "daily": 10}.get(frequency, 10)
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, attempts, max_attempts, created_at, updated_at) VALUES(%s, %s, 'monitor_check', %s, %s, 'pending', %s, 0, 5, %s, %s) ON CONFLICT (id) DO NOTHING",
+                    (job_id, org_id, monitor_id, priority, current, current, current),
+                )
+
+    def enqueue_webhook_delivery(self, job_id: str, org_id: str, monitor_id: str, url: str, payload: dict[str, Any], max_attempts: int = 5, run_at: float | None = None) -> None:
+        current = self._timestamp(run_at)
+        attempts = max(1, min(int(max_attempts), 5))
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, attempts, max_attempts, created_at, updated_at) VALUES(%s, %s, 'webhook_delivery', NULL, 5, 'pending', %s, 0, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                    (job_id, org_id, current, attempts, current, current),
+                )
+                cursor.execute(
+                    "INSERT INTO webhook_deliveries(job_id, org_id, monitor_id, url, payload_json, status, attempts, max_attempts, created_at, updated_at) VALUES(%s, %s, %s, %s, %s::jsonb, 'pending', 0, %s, %s, %s) ON CONFLICT (job_id) DO NOTHING",
+                    (job_id, org_id, monitor_id, url, json.dumps(payload, separators=(",", ":"), ensure_ascii=False), attempts, current, current),
+                )
+
+
 class SQLiteRelationalStore:
     """Explicit adapter for local development and migration source databases."""
 
@@ -308,6 +512,18 @@ class SQLiteRelationalStore:
 
     def close(self) -> None:
         self._connection.close()
+
+
+def open_distributed_queue(config: DatabaseConfig | None = None) -> PostgresDistributedQueue | None:
+    """Open the optional PostgreSQL queue coordinator when explicitly enabled."""
+    config = config or DatabaseConfig.from_environment()
+    if os.getenv("AGENTWEB_DISTRIBUTED_QUEUE", "0").strip().lower() not in {"1", "true", "yes"}:
+        return None
+    if config.driver != "postgres":
+        raise DatabaseConfigurationError("distributed queue mode requires a PostgreSQL DATABASE_URL")
+    coordinator = PostgresDistributedQueue(config.url, config.pool_size)
+    coordinator.bootstrap()
+    return coordinator
 
 
 def open_relational_store(config: DatabaseConfig | None = None):
