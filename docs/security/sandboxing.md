@@ -4,7 +4,7 @@
 
 Each [browser session](../core/browser-engine.md) runs in an isolated environment per request:
 
-- No shared browser state (cookies, storage, cache) across unrelated requests/organizations.
+- No implicit shared browser state (cookies, storage, cache) across requests or organizations. Explicit reusable storage state is encrypted, revocable, and accepted only when the authenticated organization and normalized target origin both match.
 - Resource limits (CPU, memory, execution time) to bound the impact of adversarial or misbehaving pages.
 - Network egress from within a browser session is restricted to the requested target and its same-origin resources where feasible, reducing lateral-movement risk from a malicious page.
 

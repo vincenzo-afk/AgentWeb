@@ -2,6 +2,7 @@
 
 from .api import create_server
 from .browser import BrowserEngine, BrowserSession
+from .browser_sessions import BrowserSessionStore
 from .credentials import BrowserCredentialStore
 from .engine import AgentWebEngine
 from .maintenance import purge_retention
@@ -19,6 +20,7 @@ __all__ = [
     "PostgresMetricStore",
     "purge_retention",
     "BrowserCredentialStore",
+    "BrowserSessionStore",
     "BrowserEngine",
     "BrowserSession",
     "JsonSearchProvider",

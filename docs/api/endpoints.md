@@ -13,7 +13,7 @@ Base URL: `https://api.agentweb.dev/v1`
 | POST | `/crawl` | Low-level bounded crawl; supports idempotency |
 | GET | `/crawl` | List tenant-scoped crawl runs with cursor pagination |
 | GET | `/crawl/{crawl_id}` | Retrieve one crawl run and its page metadata |
-| POST | `/browser/sessions` | Open a browser session; may use an opaque encrypted-credential reference |
+| POST | `/browser/sessions` | Open a browser session; may use opaque encrypted credential and origin-bound session-state references |
 | POST | `/extract` | Structured extraction from a page or document |
 | GET | `/memory/{target}` | Retrieve stored snapshots for a target |
 | GET | `/memory/{target}/diff` | Compute diff between snapshots |
@@ -24,9 +24,12 @@ Base URL: `https://api.agentweb.dev/v1`
 | GET | `/admin/browser-credentials` | List non-secret browser credential metadata |
 | POST | `/admin/browser-credentials` | Create an encrypted browser credential; supports idempotency |
 | DELETE | `/admin/browser-credentials/{id}` | Revoke an encrypted browser credential with idempotency support |
+| GET | `/admin/browser-session-states` | List non-secret encrypted browser session-state metadata |
+| POST | `/admin/browser-session-states` | Create encrypted origin-bound browser storage state; supports idempotency |
+| DELETE | `/admin/browser-session-states/{id}` | Revoke encrypted browser session state with idempotency support |
 | GET | `/admin/audit` | List immutable security events with cursor pagination and optional action/actor/target/time-range filters |
 | GET | `/admin/usage` | View organization usage and estimated billing |
-| DELETE | `/admin/data` | Delete organization-owned snapshots, crawl history, or execution traces; supports idempotency |
+| DELETE | `/admin/data` | Delete organization-owned snapshots, crawl history, browser session states, or execution traces; supports idempotency |
 | GET | `/admin/metrics` | Read organization-scoped operational metrics |
 
 List endpoints use the opaque `cursor` and bounded `limit` query parameters described in [pagination.md](pagination.md). Full request/response schemas are in [reference/](reference/search.md).

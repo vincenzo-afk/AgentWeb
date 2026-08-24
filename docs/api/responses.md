@@ -33,7 +33,8 @@ Standard response envelope:
 - `diff` — present for `observe`/monitor results when a change was detected.
 - Extraction responses additionally expose `tables`, `entities`, and `source_spans`; source spans are local offsets into the returned title or text field.
 - Crawl responses expose a durable `crawl_id`, bounded page metadata, `pages_crawled`, and `truncated`; `GET /crawl` and `GET /crawl/{id}` return only the authenticated organization’s history.
-- `DELETE /admin/data` returns deletion counts for snapshots, crawl history, and traces owned by the authenticated organization. It does not delete API keys, audit events, or usage records.
+- Browser session-state lifecycle responses expose only opaque IDs, labels, normalized origins, timestamps, and revocation metadata. They never expose cookies, local-storage values, or session tokens.
+- `DELETE /admin/data` returns deletion counts for snapshots, crawl history, browser session states, and traces owned by the authenticated organization. It does not delete API keys, audit events, or usage records.
 - `GET /admin/metrics` returns organization-filtered counters, observations, and gauges. Authenticated responses expose `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`; a `429` response also exposes `Retry-After`.
 
 See [citations.md](citations.md) for how claims map to sources, and [errors.md](errors.md) for error responses.

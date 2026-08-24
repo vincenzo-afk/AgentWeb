@@ -87,9 +87,9 @@ class BrowserEngine:
                 return path
         return None
 
-    def open(self, url: str, actions: list[dict] | None = None, credential: dict[str, str] | None = None) -> BrowserSession:
+    def open(self, url: str, actions: list[dict] | None = None, credential: dict[str, str] | None = None, storage_state: dict | None = None) -> BrowserSession:
         if self._process_pool is None:
-            return self._open_in_process(url, actions, credential)
+            return self._open_in_process(url, actions, credential, storage_state)
         validate_url(url)
         decision = self.trust_engine.should_fetch(url)
         if not decision.allowed:
@@ -97,6 +97,8 @@ class BrowserEngine:
         requested_actions = actions or []
         if not isinstance(requested_actions, list):
             raise InvalidRequestError("actions must be a JSON array")
+        if storage_state is not None and not isinstance(storage_state, dict):
+            raise InvalidRequestError("storage_state must be a JSON object")
         if len(requested_actions) > 20:
             raise InvalidRequestError("browser action count cannot exceed 20")
         if any(isinstance(action, dict) and "credentials" in action for action in requested_actions):
@@ -105,6 +107,7 @@ class BrowserEngine:
             "url": url,
             "actions": requested_actions,
             "credential": credential,
+            "storage_state": storage_state,
             "executable_path": self.executable_path,
             "action_timeout": self.action_timeout,
             "session_timeout": self.session_timeout,
@@ -114,7 +117,7 @@ class BrowserEngine:
         with self._worker_slot():
             return self._process_pool.run(payload, self.session_timeout + self.action_timeout)
 
-    def _open_in_process(self, url: str, actions: list[dict] | None = None, credential: dict[str, str] | None = None) -> BrowserSession:
+    def _open_in_process(self, url: str, actions: list[dict] | None = None, credential: dict[str, str] | None = None, storage_state: dict | None = None) -> BrowserSession:
         """Render a URL and run documented actions, returning partial results on action failure."""
         validate_url(url)
         requested_url = url
@@ -134,6 +137,8 @@ class BrowserEngine:
         if actions is not None and not isinstance(actions, list):
             raise InvalidRequestError("actions must be a JSON array")
         requested_actions = actions or []
+        if storage_state is not None and not isinstance(storage_state, dict):
+            raise InvalidRequestError("storage_state must be a JSON object")
         if len(requested_actions) > 20:
             raise InvalidRequestError("browser action count cannot exceed 20")
         if any(isinstance(action, dict) and "credentials" in action for action in requested_actions):
@@ -166,12 +171,15 @@ class BrowserEngine:
                         "--no-default-browser-check",
                     ],
                 )
-                context = browser.new_context(
-                    service_workers="block",
-                    java_script_enabled=True,
-                    ignore_https_errors=False,
-                    viewport={"width": 1280, "height": 900},
-                )
+                context_options = {
+                    "service_workers": "block",
+                    "java_script_enabled": True,
+                    "ignore_https_errors": False,
+                    "viewport": {"width": 1280, "height": 900},
+                }
+                if storage_state is not None:
+                    context_options["storage_state"] = storage_state
+                context = browser.new_context(**context_options)
                 context.route("**/*", lambda route: route.continue_() if allow_request(route.request) else route.abort())
                 page = context.new_page()
                 page.set_default_timeout(int(self.action_timeout * 1000))

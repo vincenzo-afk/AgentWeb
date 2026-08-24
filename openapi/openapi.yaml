@@ -425,6 +425,54 @@ paths:
           description: Browser credential revoked
         '404':
           $ref: '#/components/responses/BadRequest'
+  /admin/browser-session-states:
+    get:
+      summary: List non-secret browser session-state metadata for the organization
+      operationId: listBrowserSessionStates
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Browser session-state metadata without cookies or storage tokens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSessionStatePage'
+    post:
+      summary: Create encrypted browser storage state for an authorized origin
+      operationId: createBrowserSessionState
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserSessionStateCreate'
+      responses:
+        '201':
+          description: Created session-state metadata; cookies and storage values are never returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSessionState'
+  /admin/browser-session-states/{id}:
+    delete:
+      summary: Revoke encrypted browser session state owned by the organization
+      operationId: revokeBrowserSessionState
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Browser session state revoked
+        '404':
+          $ref: '#/components/responses/BadRequest'
   /admin/audit:
     get:
       summary: Read immutable security audit events for the organization
@@ -530,7 +578,7 @@ paths:
               properties:
                 kind:
                   type: string
-                  enum: [snapshots, traces, crawls, all]
+                  enum: [snapshots, traces, crawls, session_states, all]
                   default: snapshots
                 target:
                   type: string
@@ -543,7 +591,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [org_id, kind, deleted_snapshots, deleted_traces, deleted_crawls]
+                required: [org_id, kind, deleted_snapshots, deleted_traces, deleted_crawls, deleted_session_states]
                 properties:
                   org_id:
                     type: string
@@ -554,6 +602,8 @@ paths:
                   deleted_traces:
                     type: integer
                   deleted_crawls:
+                    type: integer
+                  deleted_session_states:
                     type: integer
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -834,6 +884,61 @@ components:
           type: string
           minLength: 1
           maxLength: 10000
+    BrowserSessionState:
+      type: object
+      required: [id, org_id, label, origin, created_at, last_used_at, revoked_at]
+      properties:
+        id:
+          type: string
+        org_id:
+          type: string
+        label:
+          type: string
+        origin:
+          type: string
+          format: uri
+        created_at:
+          type: number
+        last_used_at:
+          type: number
+          nullable: true
+        revoked_at:
+          type: number
+          nullable: true
+    BrowserSessionStateCreate:
+      type: object
+      required: [label, origin, state]
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        origin:
+          type: string
+          format: uri
+          description: Absolute HTTP(S) origin; credentials and paths are normalized or rejected.
+        state:
+          type: object
+          description: Playwright-compatible storage state supplied by an authorized operator; encrypted at rest and never returned.
+          additionalProperties: true
+    BrowserSessionStatePage:
+      type: object
+      required: [session_states, data, next_cursor, has_more]
+      properties:
+        session_states:
+          type: array
+          items:
+            $ref: '#/components/schemas/BrowserSessionState'
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BrowserSessionState'
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     BrowserCredentialPage:
       type: object
       required: [credentials, data, next_cursor, has_more]
@@ -861,6 +966,9 @@ components:
         credential_id:
           type: string
           description: Opaque credential ID; resolved only for this tenant-scoped browser session.
+        session_state_id:
+          type: string
+          description: Opaque origin-bound encrypted storage-state ID; cookies and storage values are resolved only for this tenant-scoped session.
         actions:
           type: array
           maxItems: 20

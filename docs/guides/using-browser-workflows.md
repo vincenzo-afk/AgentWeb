@@ -15,6 +15,23 @@ const session = await internet.browser.open({
 });
 ```
 
+## Reusing authorized authentication state
+
+An authorized operator can first create encrypted Playwright-compatible storage state through `POST /admin/browser-session-states`. The endpoint accepts a label, one absolute HTTP(S) origin, and a state object containing cookies and/or origin local storage, but returns only non-secret metadata. A later browser request may supply the returned opaque ID:
+
+```json
+{
+  "url": "https://example.com/account",
+  "session_state_id": "bstate_abc123",
+  "actions": [
+    { "type": "wait_for", "selector": ".account-menu" },
+    { "type": "extract", "selector": ".account-menu" }
+  ]
+}
+```
+
+State is decrypted only for the authenticated organization and the same normalized origin. Revoked, malformed, oversized, cross-tenant, and cross-origin state is rejected; session tokens are never returned in browser results, traces, or metadata listings. Use `DELETE /admin/browser-session-states/{id}` to revoke one state, or `DELETE /admin/data` with `kind: "session_states"` to remove all state for the organization.
+
 ## Best practices
 
 - Prefer `wait_for` over fixed delays; pages render at variable speed.

@@ -14,7 +14,7 @@ The browser layer enables rendering, interaction, navigation, and extraction fro
 
 Each browser session creates a fresh context and executes in a bounded browser-worker process. The process boundary limits browser-runtime failures and prevents browser state from leaking between requests. HTTP(S) egress is restricted to the target origin and same-origin resources by default; see [security/sandboxing.md](../security/sandboxing.md) for the isolation model and [security/threat-model.md](../security/threat-model.md) for the risks this mitigates, including arbitrary third-party JavaScript execution.
 
-Credentials are resolved only for the isolated session through an opaque tenant-scoped credential reference. Raw credential values are rejected in action payloads, and credential material is scrubbed from output, errors, and persisted traces. Cookies, browser storage, and session state are not persisted between requests. Authenticated session-state reuse remains intentionally outside this milestone.
+Credentials are resolved only for the isolated session through an opaque tenant-scoped credential reference. Raw credential values are rejected in action payloads, and credential material is scrubbed from output, errors, and persisted traces. By default, cookies and browser storage are discarded with the fresh context. An authorized operator may explicitly create encrypted, origin-bound Playwright storage state through the session-state admin endpoints and supply its opaque `session_state_id` to a later request; state is resolved only for the same organization and origin and is never included in results.
 
 ## Process-pool configuration
 

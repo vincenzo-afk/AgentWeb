@@ -339,6 +339,10 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 credentials, next_cursor, has_more = _page(self.engine.credentials.list(principal.org_id), query)
                 self._send_json(HTTPStatus.OK, {"credentials": credentials, "data": credentials, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
+            if path == "/admin/browser-session-states":
+                states, next_cursor, has_more = _page(self.engine.session_states.list(principal.org_id), query)
+                self._send_json(HTTPStatus.OK, {"session_states": states, "data": states, "next_cursor": next_cursor, "has_more": has_more}, request_id)
+                return
             if path == "/admin/audit":
                 since = _parse_audit_timestamp(query, "since")
                 until = _parse_audit_timestamp(query, "until")
@@ -377,7 +381,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
         path = urlparse(self.path).path
-        scope = "admin:*" if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/admin/data")) else "observe:manage"
+        scope = "admin:*" if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/admin/browser-session-states/", "/admin/data")) else "observe:manage"
         principal = self._authenticate(scope, request_id)
         if principal is None:
             return
@@ -385,14 +389,14 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json() if path == "/admin/data" else {}
-            if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/observe/")) or path == "/admin/data":
+            if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/admin/browser-session-states/", "/observe/")) or path == "/admin/data":
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
             if path == "/admin/data":
                 kind = payload.get("kind", "snapshots")
-                if kind not in {"snapshots", "traces", "crawls", "all"}:
-                    raise InvalidRequestError("kind must be snapshots, traces, crawls, or all")
+                if kind not in {"snapshots", "traces", "crawls", "session_states", "all"}:
+                    raise InvalidRequestError("kind must be snapshots, traces, crawls, session_states, or all")
                 target = payload.get("target")
                 if target is not None and (not isinstance(target, str) or not target.strip()):
                     raise InvalidRequestError("target must be a non-empty string when provided")
@@ -402,8 +406,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 deleted_snapshots = self.engine.memory.delete_snapshots(principal.org_id, redact_url(target) if target and target.startswith(("http://", "https://")) else target) if kind in {"snapshots", "all"} else 0
                 deleted_traces = self.engine.traces.delete(principal.org_id, execution_id) if kind in {"traces", "all"} else 0
                 deleted_crawls = self.engine.memory.delete_crawls(principal.org_id) if kind in {"crawls", "all"} else 0
-                self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls})
-                response_payload = {"org_id": principal.org_id, "kind": kind, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls}
+                deleted_session_states = self.engine.session_states.delete_all(principal.org_id) if kind in {"session_states", "all"} else 0
+                self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls, "deleted_session_states": deleted_session_states})
+                response_payload = {"org_id": principal.org_id, "kind": kind, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls, "deleted_session_states": deleted_session_states}
                 self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.OK), response_payload)
                 self._send_json(HTTPStatus.OK, response_payload, request_id)
                 return
@@ -418,6 +423,13 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 credential_id = path.rsplit("/", 1)[-1]
                 if not self.engine.credentials.revoke(principal.org_id, credential_id, principal.key_id):
                     raise NotFoundError("browser credential not found")
+                self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.NO_CONTENT), None)
+                self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
+                return
+            if path.startswith("/admin/browser-session-states/"):
+                state_id = path.rsplit("/", 1)[-1]
+                if not self.engine.session_states.revoke(principal.org_id, state_id, principal.key_id):
+                    raise NotFoundError("browser session state not found")
                 self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.NO_CONTENT), None)
                 self._send_json(HTTPStatus.NO_CONTENT, request_id=request_id)
                 return
@@ -448,6 +460,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             "/browser/sessions": "browser:execute",
             "/admin/keys": "admin:*",
             "/admin/browser-credentials": "admin:*",
+            "/admin/browser-session-states": "admin:*",
         }.get(path)
         if scope is None:
             self._error(NotFoundError("route not found"), request_id)
@@ -459,7 +472,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json()
-            if path in {"/solve", "/observe", "/crawl", "/admin/keys", "/admin/browser-credentials"}:
+            if path in {"/solve", "/observe", "/crawl", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
@@ -486,8 +499,17 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 )
                 response_payload = result.to_dict()
             elif path == "/browser/sessions":
-                session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id, payload.get("credential_id"))
+                session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id, payload.get("credential_id"), payload.get("session_state_id"))
                 response_payload = session.to_dict()
+            elif path == "/admin/browser-session-states":
+                response_status = HTTPStatus.CREATED
+                response_payload = self.engine.session_states.create(
+                    principal.org_id,
+                    payload.get("label"),
+                    payload.get("origin"),
+                    payload.get("state"),
+                    principal.key_id,
+                )
             elif path == "/admin/browser-credentials":
                 response_status = HTTPStatus.CREATED
                 response_payload = self.engine.credentials.create(

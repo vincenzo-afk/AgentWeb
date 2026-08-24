@@ -26,6 +26,8 @@ Each session is dispatched through a bounded, lazily created spawned worker proc
 
 Each session is isolated per request and resource-limited; network egress is restricted to the session target and same-origin resources. See [../security/SECURITY_MODEL.md](../security/SECURITY_MODEL.md) and [docs/security/sandboxing.md](../../docs/security/sandboxing.md).
 
+Authorized operators may create encrypted Playwright-compatible storage state through the tenant-scoped session-state lifecycle endpoints. Each state is bound to one normalized HTTP(S) origin, stored with the provider-backed Fernet key, and exposed only through metadata. Browser execution may supply an opaque `session_state_id` for the same organization and origin; revoked, cross-tenant, cross-origin, malformed, and oversized states are rejected. Cookies, local storage, and session tokens never appear in browser results, traces, audit metadata, or list responses. `DELETE /admin/data` supports `kind: session_states` for organization cleanup.
+
 ## Failure modes
 
-Selector not found or timeout → retry per [../resilience/TIMEOUT_POLICY.md](../resilience/TIMEOUT_POLICY.md), surface partial results if some actions succeeded, and preserve a retryable error when the worker itself is unavailable. CAPTCHA/MFA and persistent authenticated session-state reuse remain non-goals for this milestone.
+Selector not found / timeout → retry per [../resilience/TIMEOUT_POLICY.md](../resilience/TIMEOUT_POLICY.md); surface partial results if some actions succeeded. Session-state decryption or browser-context failures remain typed browser errors and do not fall back to an unauthenticated context. A worker-process failure remains retryable, while CAPTCHA/MFA automation remains a non-goal.

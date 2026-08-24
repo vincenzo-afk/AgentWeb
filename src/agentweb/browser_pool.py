@@ -21,7 +21,7 @@ def _run_browser_session(payload: dict[str, Any]):
         max_workers=1,
         process_workers=0,
     )
-    return engine._open_in_process(payload["url"], payload.get("actions"), payload.get("credential"))
+    return engine._open_in_process(payload["url"], payload.get("actions"), payload.get("credential"), payload.get("storage_state"))
 
 
 class BrowserProcessPool:

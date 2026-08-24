@@ -20,10 +20,11 @@ from agentweb.api import create_server
 from agentweb.auth import Authenticator, KeyStore, RateLimiter
 from agentweb.browser import BrowserEngine
 from agentweb.browser_pool import BrowserProcessPool
+from agentweb.browser_sessions import BrowserSessionStore
 from agentweb.credentials import BrowserCredentialStore
 from agentweb.crawler import Crawler
 from agentweb.engine import AgentWebEngine
-from agentweb.errors import AuthenticationError, BrowserUnavailableError, PermissionError, RateLimitError
+from agentweb.errors import AuthenticationError, BrowserUnavailableError, InvalidRequestError, PermissionError, RateLimitError
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.maintenance import purge_retention
@@ -140,6 +141,35 @@ class AgentWebTests(unittest.TestCase):
         self.assertNotEqual(encrypted, "password-123")
         self.assertTrue(store.revoke("org-a", created["id"], "operator"))
         self.assertIsNone(store.resolve("org-a", created["id"]))
+
+    def test_browser_session_state_is_encrypted_scoped_origin_bound_and_revocable(self):
+        key = Fernet.generate_key().decode()
+        store = BrowserSessionStore(Path(self.temp_dir.name) / "session-states.sqlite3", MappingSecretProvider({"AGENTWEB_BROWSER_CREDENTIAL_KEY": key}))
+        state = {"cookies": [{"name": "sid", "value": "secret-token", "url": self.url}], "origins": []}
+        created = store.create("org-a", "shop login", self.url, state, "operator")
+        self.assertNotIn("secret-token", json.dumps(created))
+        self.assertNotIn("secret-token", json.dumps(store.list("org-a")))
+        self.assertEqual(store.resolve("org-a", created["id"], self.url + "/next"), state)
+        self.assertIsNone(store.resolve("org-b", created["id"], self.url))
+        self.assertIsNone(store.resolve("org-a", created["id"], "http://other.example"))
+        with sqlite3.connect(store.path) as connection:
+            encrypted = connection.execute("SELECT encrypted_state FROM browser_session_states WHERE id=?", (created["id"],)).fetchone()[0]
+        self.assertNotIn("secret-token", encrypted)
+        self.assertTrue(store.revoke("org-a", created["id"], "operator"))
+        self.assertIsNone(store.resolve("org-a", created["id"], self.url))
+
+    def test_browser_session_state_is_reused_by_a_fresh_context(self):
+        original = FixtureHandler.body
+        FixtureHandler.body = b"<html><body><script>document.body.innerText = localStorage.getItem('auth') || 'missing';</script></body></html>"
+        browser = BrowserEngine(process_workers=0, session_timeout=5, action_timeout=5)
+        try:
+            state = {"cookies": [], "origins": [{"origin": f"http://127.0.0.1:{self.fixture.server_port}", "localStorage": [{"name": "auth", "value": "authenticated"}]}]}
+            session = browser.open(self.url, storage_state=state)
+            self.assertEqual(session.status, "complete")
+            self.assertIn("authenticated", session.text)
+        finally:
+            browser.close()
+            FixtureHandler.body = original
 
     def test_browser_credential_action_scrubs_values_from_rendered_output(self):
         original = FixtureHandler.body
@@ -986,6 +1016,42 @@ class AgentWebTests(unittest.TestCase):
         finally:
             stop_test_server(server, thread)
 
+    def test_http_browser_session_state_lifecycle_is_tenant_scoped_and_revocable(self):
+        original = FixtureHandler.body
+        FixtureHandler.body = b"<html><body><script>document.body.innerText = localStorage.getItem('auth') || 'missing';</script></body></html>"
+        os.environ["AGENTWEB_BROWSER_CREDENTIAL_KEY"] = Fernet.generate_key().decode()
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "session-state-api.sqlite3"))
+        admin_a = server.authenticator.key_store.create_key("org-a", ["admin:*", "browser:execute"])['secret']
+        admin_b = server.authenticator.key_store.create_key("org-b", ["admin:*", "browser:execute"])['secret']
+        thread = start_test_server(server)
+        try:
+            origin = f"http://127.0.0.1:{self.fixture.server_port}"
+            state = {"cookies": [], "origins": [{"origin": origin, "localStorage": [{"name": "auth", "value": "authenticated"}]}]}
+            body = json.dumps({"label": "fixture login", "origin": origin, "state": state}).encode()
+            headers = {"Authorization": "Bearer " + admin_a, "Content-Type": "application/json"}
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-session-states", data=body, method="POST", headers=headers)) as response:
+                created = json.loads(response.read())
+            self.assertTrue(created["id"].startswith("bstate_"))
+            self.assertNotIn("authenticated", json.dumps(created))
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-session-states", headers=headers)) as response:
+                listed = json.loads(response.read())
+            self.assertEqual(listed["data"][0]["id"], created["id"])
+            self.assertNotIn("authenticated", json.dumps(listed))
+            browser_body = json.dumps({"url": self.url, "session_state_id": created["id"]}).encode()
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/browser/sessions", data=browser_body, method="POST", headers=headers)) as response:
+                session = json.loads(response.read())
+            self.assertIn("authenticated", session["text"])
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-session-states", headers={"Authorization": "Bearer " + admin_b})) as response:
+                self.assertEqual(json.loads(response.read())["data"], [])
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/browser-session-states/{created['id']}", method="DELETE", headers=headers)):
+                pass
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/browser/sessions", data=browser_body, method="POST", headers=headers))
+            self.assertEqual(raised.exception.code, 400)
+        finally:
+            stop_test_server(server, thread)
+            FixtureHandler.body = original
+
     def test_http_browser_credentials_are_metadata_only_and_revocable(self):
         original = FixtureHandler.body
         FixtureHandler.body = b"<html><body><form><input id='username'><input id='password' type='password'></form></body></html>"
@@ -1346,6 +1412,12 @@ class AgentWebTests(unittest.TestCase):
         direct = BrowserEngine(process_workers=0, session_timeout=1)
         self.assertEqual(direct.process_workers, 0)
         self.assertIsNone(direct._process_pool)
+
+    def test_browser_rejects_malformed_storage_state(self):
+        browser = BrowserEngine(process_workers=0)
+        with self.assertRaises(InvalidRequestError):
+            browser.open(self.url, storage_state=["not", "an", "object"])
+        browser.close()
 
     def test_browser_process_pool_preserves_unavailable_error(self):
         browser = BrowserEngine(executable_path="/does/not/exist", process_workers=1, session_timeout=1)
