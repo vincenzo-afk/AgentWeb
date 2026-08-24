@@ -11,7 +11,7 @@ The runtime accepts the documented `/v1/...` path prefix for every public API ro
 ## Policy
 
 - Breaking changes are only introduced in a new major version (`v2`, etc.).
-- Additive changes (new optional fields, new endpoints) may appear within `v1` without a version bump.
+- Additive changes (new optional fields, new endpoints) may appear within `v1` without a version bump. Successful JSON object responses now include the optional-at-schema-boundary `_meta` object and `X-AgentWeb-API-Version: v1`; existing endpoint fields are not wrapped or relocated.
 - Deprecations are announced with a minimum notice period and a `Deprecation` response header before removal. The current bare-path compatibility bridge is marked with `Deprecation: true` and is not the canonical public form.
 
 ## SDK versioning

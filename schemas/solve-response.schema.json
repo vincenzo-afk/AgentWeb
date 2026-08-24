@@ -2,7 +2,20 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "SolveResponse",
   "type": "object",
+  "definitions": {
+    "ResponseMetadata": {
+      "type": "object",
+      "required": ["request_id", "api_version", "path", "deprecated"],
+      "properties": {
+        "request_id": { "type": "string" },
+        "api_version": { "type": "string", "enum": ["v1"] },
+        "path": { "type": "string" },
+        "deprecated": { "type": "boolean" }
+      }
+    }
+  },
   "properties": {
+    "_meta": { "$ref": "#/definitions/ResponseMetadata" },
     "execution_id": { "type": "string" },
     "mode": { "type": "string", "enum": ["flash", "focus", "dive"] },
     "answer": { "type": "string" },

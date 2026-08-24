@@ -690,10 +690,28 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    ResponseMetadata:
+      type: object
+      description: Request-scoped metadata included in every successful JSON object response.
+      required: [request_id, api_version, path, deprecated]
+      properties:
+        request_id:
+          type: string
+        api_version:
+          type: string
+          enum: [v1]
+        path:
+          type: string
+          description: Canonical versioned route.
+        deprecated:
+          type: boolean
+          description: True when the request used a bare compatibility path.
     HealthResponse:
       type: object
       required: [status, service, checks]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         status:
           type: string
           enum: [ok, degraded]
@@ -712,6 +730,8 @@ components:
       type: object
       required: [period, requests_by_mode, estimated_cost]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         period:
           type: string
         requests_by_mode:
@@ -724,6 +744,8 @@ components:
       type: object
       required: [url, status, text, links, tables, entities, source_spans, field_confidence, confidence, confidence_reasons]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         url:
           type: string
         status:
@@ -791,6 +813,8 @@ components:
     ApiKey:
       type: object
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         id:
           type: string
         org_id:
@@ -810,6 +834,8 @@ components:
       type: object
       required: [id, org_id, actor, action, target, timestamp, metadata]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         id:
           type: string
         org_id:
@@ -828,6 +854,8 @@ components:
       type: object
       required: [events, data, next_cursor, has_more]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         events:
           type: array
           items:
@@ -854,6 +882,8 @@ components:
       type: object
       required: [id, org_id, label, username, created_at, revoked_at]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         id:
           type: string
         org_id:
@@ -888,6 +918,8 @@ components:
       type: object
       required: [id, org_id, label, origin, created_at, last_used_at, revoked_at]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         id:
           type: string
         org_id:
@@ -926,6 +958,8 @@ components:
       type: object
       required: [session_states, data, next_cursor, has_more]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         session_states:
           type: array
           items:
@@ -943,6 +977,8 @@ components:
       type: object
       required: [credentials, data, next_cursor, has_more]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         credentials:
           type: array
           items:
@@ -997,6 +1033,8 @@ components:
       type: object
       required: [session_id, url, status, actions, extracted, title, text, html, warnings]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         session_id:
           type: string
         url:
@@ -1105,6 +1143,8 @@ components:
       type: object
       required: [execution_id, mode, answer, sources, citations, created_at, insufficient_evidence, output_format, evidence_score, conflicts, structured_output]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         execution_id:
           type: string
         mode:
@@ -1192,6 +1232,8 @@ components:
       type: object
       required: [id, org_id, start_url, max_pages, depth, status, pages_crawled, truncated, created_at]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         id:
           type: string
         org_id:
@@ -1223,6 +1265,8 @@ components:
       type: object
       required: [crawl_id, pages, pages_crawled, truncated]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         crawl_id:
           type: string
         pages:
@@ -1269,6 +1313,8 @@ components:
       type: object
       required: [id, org_id, task, status, frequency, last_delivery_attempts]
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         id:
           type: string
         org_id:
@@ -1316,6 +1362,8 @@ components:
     WebhookDelivery:
       type: object
       properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
         job_id:
           type: string
         job_type:

@@ -178,7 +178,7 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `GET` | `/admin/audit` | Read cursor-paginated immutable security events for the caller's organization; requires `admin:*`. |
 | `GET` | `/admin/usage` | Read organization-scoped monthly usage and estimated cost; requires `admin:*`. |
 
-A successful `/solve` response contains `execution_id`, `mode`, `answer`, `sources`, `citations`, and `created_at`. Each source includes an ID, URL, title, snippet, trust score, and citation flag. Errors use the documented `{ "error": { "type": ..., "message": ... } }` shape.
+Successful JSON object responses retain their endpoint-specific fields and include an additive `_meta` object containing `request_id`, `api_version: "v1"`, the canonical `/v1/...` path, and a `deprecated` flag. The request ID is also returned through `X-Request-ID`, and responses include `X-AgentWeb-API-Version: v1`. Bare compatibility paths set `deprecated` to `true` and return `Deprecation: true`; `204` responses remain bodyless. A successful `/solve` response contains `execution_id`, `mode`, `answer`, `sources`, `citations`, and `created_at`. Each source includes an ID, URL, title, snippet, trust score, and citation flag. Errors retain the documented `{ "error": { "type": ..., "message": ... } }` shape and do not include success metadata.
 
 ## Python API
 

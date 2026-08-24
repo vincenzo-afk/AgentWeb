@@ -973,6 +973,80 @@ class AgentWebTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as raised:
                 urlopen(Request(base + "/v2/health", headers={"Authorization": "Bearer " + secret}))
             self.assertEqual(raised.exception.code, 404)
+            error_payload = json.loads(raised.exception.read())
+            self.assertIn("error", error_payload)
+            self.assertNotIn("_meta", error_payload)
+        finally:
+            stop_test_server(server, thread)
+
+    def test_api_success_metadata_is_additive_and_request_correlated(self):
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "response-meta.sqlite3"))
+        thread = start_test_server(server)
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            with urlopen(Request(base + "/v1/health")) as response:
+                versioned_headers = response.headers
+                versioned = json.loads(response.read())
+            self.assertEqual(versioned["status"], "ok")
+            self.assertEqual(versioned["_meta"]["request_id"], versioned_headers["X-Request-ID"])
+            self.assertEqual(versioned["_meta"]["api_version"], "v1")
+            self.assertEqual(versioned["_meta"]["path"], "/v1/health")
+            self.assertFalse(versioned["_meta"]["deprecated"])
+            self.assertEqual(versioned_headers["X-AgentWeb-API-Version"], "v1")
+
+            with urlopen(Request(base + "/health")) as response:
+                legacy_headers = response.headers
+                legacy = json.loads(response.read())
+            self.assertEqual(legacy["status"], "ok")
+            self.assertTrue(legacy["_meta"]["deprecated"])
+            self.assertEqual(legacy["_meta"]["path"], "/v1/health")
+            self.assertEqual(legacy["_meta"]["request_id"], legacy_headers["X-Request-ID"])
+            self.assertEqual(legacy_headers["Deprecation"], "true")
+
+            secret = server.authenticator.key_store.create_key("org-a", ["observe:manage"])['secret']
+            request = Request(
+                base + "/v1/observe",
+                data=json.dumps({"task": "watch this fixture"}).encode(),
+                method="POST",
+                headers={"Authorization": "Bearer " + secret, "Content-Type": "application/json"},
+            )
+            with urlopen(request) as response:
+                monitor = json.loads(response.read())
+            self.assertIn("id", monitor)
+            self.assertEqual(monitor["org_id"], "org-a")
+            self.assertEqual(monitor["_meta"]["api_version"], "v1")
+            self.assertEqual(monitor["_meta"]["path"], "/v1/observe")
+            self.assertFalse(monitor["_meta"]["deprecated"])
+        finally:
+            stop_test_server(server, thread)
+
+    def test_api_success_metadata_covers_lists_admin_and_no_content(self):
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "response-meta-lists.sqlite3"))
+        admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
+        thread = start_test_server(server)
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            headers = {"Authorization": "Bearer " + admin}
+            for path, field in (
+                ("/v1/crawl", "crawls"),
+                ("/v1/admin/browser-credentials", "credentials"),
+                ("/v1/admin/browser-session-states", "session_states"),
+                ("/v1/admin/keys", "keys"),
+                ("/v1/admin/metrics", "counters"),
+            ):
+                with urlopen(Request(base + path, headers=headers)) as response:
+                    payload = json.loads(response.read())
+                    self.assertEqual(response.headers["X-AgentWeb-API-Version"], "v1")
+                self.assertIn("_meta", payload)
+                self.assertEqual(payload["_meta"]["path"], path)
+                self.assertIn(field, payload)
+            request = Request(base + "/v1/observe/nonexistent", method="DELETE", headers=headers)
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(request)
+            error_payload = json.loads(raised.exception.read())
+            self.assertIn("error", error_payload)
+            self.assertNotIn("_meta", error_payload)
+            self.assertNotIn(admin, json.dumps(error_payload))
         finally:
             stop_test_server(server, thread)
 
@@ -1315,6 +1389,9 @@ class AgentWebTests(unittest.TestCase):
             )
             with urlopen(revoke_own) as response:
                 self.assertEqual(response.status, 204)
+                self.assertEqual(response.read(), b"")
+                self.assertTrue(response.headers["X-Request-ID"].startswith("req_"))
+                self.assertEqual(response.headers["X-AgentWeb-API-Version"], "v1")
             with self.assertRaises(Exception):
                 urlopen(Request(
                     f"http://127.0.0.1:{server.server_port}/search",
@@ -1334,10 +1411,19 @@ class AgentWebTests(unittest.TestCase):
             body = json.dumps({"task": f"Summarize {self.url}", "mode": "flash", "idempotency_key": "solve-1"}).encode()
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {admin}"}
             with urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=body, method="POST", headers=headers)) as response:
+                first_headers = response.headers
                 first = json.loads(response.read())
             with urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=body, method="POST", headers=headers)) as response:
+                replay_headers = response.headers
                 replay = json.loads(response.read())
             self.assertEqual(first["execution_id"], replay["execution_id"])
+            first_without_meta = {key: value for key, value in first.items() if key != "_meta"}
+            replay_without_meta = {key: value for key, value in replay.items() if key != "_meta"}
+            self.assertEqual(first_without_meta, replay_without_meta)
+            self.assertEqual(first["_meta"]["request_id"], first_headers["X-Request-ID"])
+            self.assertEqual(replay["_meta"]["request_id"], replay_headers["X-Request-ID"])
+            self.assertNotEqual(first["_meta"]["request_id"], replay["_meta"]["request_id"])
+            self.assertEqual(replay["_meta"]["path"], "/v1/solve")
             conflict_body = json.dumps({"task": "different", "mode": "flash", "idempotency_key": "solve-1"}).encode()
             with self.assertRaises(Exception) as context:
                 urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=conflict_body, method="POST", headers=headers))

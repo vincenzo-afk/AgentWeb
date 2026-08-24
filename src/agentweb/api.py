@@ -130,7 +130,23 @@ class AgentWebHandler(BaseHTTPRequestHandler):
     def principal(self):
         return getattr(self, "_principal", None)
 
+    def _response_metadata(self, request_id: str | None) -> dict[str, object]:
+        return {
+            "request_id": request_id,
+            "api_version": "v1",
+            "path": getattr(self, "_canonical_api_path", "/v1"),
+            "deprecated": bool(getattr(self, "_legacy_api_path", False)),
+        }
+
+    def _decorate_success_payload(self, payload: dict | list | None, request_id: str | None) -> dict | list | None:
+        if not isinstance(payload, dict) or "error" in payload:
+            return payload
+        decorated = dict(payload)
+        decorated["_meta"] = self._response_metadata(request_id)
+        return decorated
+
     def _send_json(self, status: int, payload: dict | list | None = None, request_id: str | None = None) -> None:
+        payload = self._decorate_success_payload(payload, request_id) if status != HTTPStatus.NO_CONTENT else payload
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self._last_response_status = int(status)
         self.send_response(status)
@@ -160,6 +176,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 self.send_header("Retry-After", str(int(retry_after)))
         if request_id:
             self.send_header("X-Request-ID", request_id)
+        self.send_header("X-AgentWeb-API-Version", "v1")
         if getattr(self, "_legacy_api_path", False):
             self.send_header("Deprecation", "true")
         self.end_headers()
@@ -226,6 +243,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 raise ConflictError("idempotency key was already used with a different request")
             if existing["status"] == "completed":
                 body = json.loads(existing.get("response_body") or "null")
+                if isinstance(body, dict):
+                    body.pop("_meta", None)
                 self._send_json(int(existing["response_status"]), body, "req_replay_" + uuid.uuid4().hex[:12])
                 return key, None
             raise ConflictError("idempotency key is already being processed")
@@ -261,6 +280,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         return {"status": "ok" if healthy else "degraded", "service": "agentweb", "checks": checks}
 
     def do_OPTIONS(self) -> None:  # noqa: N802
+        path, versioned = _normalize_api_path(urlparse(self.path).path)
+        self._legacy_api_path = not versioned
+        self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
         self._send_json(HTTPStatus.NO_CONTENT)
 
     def do_GET(self) -> None:  # noqa: N802
@@ -268,6 +290,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         path, versioned = _normalize_api_path(parsed_url.path)
         self._legacy_api_path = not versioned
+        self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
         query = parse_qs(parsed_url.query)
         if path == "/health":
             payload = self._health_payload()
@@ -393,6 +416,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_id = "req_" + uuid.uuid4().hex[:16]
         path, versioned = _normalize_api_path(urlparse(self.path).path)
         self._legacy_api_path = not versioned
+        self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
         scope = "admin:*" if path.startswith(("/admin/keys/", "/admin/browser-credentials/", "/admin/browser-session-states/", "/admin/data")) else "observe:manage"
         principal = self._authenticate(scope, request_id)
         if principal is None:
@@ -421,6 +445,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 deleted_session_states = self.engine.session_states.delete_all(principal.org_id) if kind in {"session_states", "all"} else 0
                 self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls, "deleted_session_states": deleted_session_states})
                 response_payload = {"org_id": principal.org_id, "kind": kind, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls, "deleted_session_states": deleted_session_states}
+                response_payload = self._decorate_success_payload(response_payload, request_id)
                 self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.OK), response_payload)
                 self._send_json(HTTPStatus.OK, response_payload, request_id)
                 return
@@ -464,6 +489,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_id = "req_" + uuid.uuid4().hex[:16]
         path, versioned = _normalize_api_path(urlparse(self.path).path)
         self._legacy_api_path = not versioned
+        self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
         scope = {
             "/solve": "solve:execute",
             "/observe": "observe:manage",
@@ -535,6 +561,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             else:
                 response_status = HTTPStatus.CREATED
                 response_payload = self.authenticator.key_store.create_key(principal.org_id, payload.get("scopes", []), principal.key_id)
+            response_payload = self._decorate_success_payload(response_payload, request_id)
             self._complete_idempotency(principal, idempotency_key, request_hash, int(response_status), response_payload)
             self._send_json(response_status, response_payload, request_id)
         except AgentWebError as error:
