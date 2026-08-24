@@ -19,6 +19,7 @@ from agentweb.alerting import DeliveryResult, signature
 from agentweb.api import create_server
 from agentweb.auth import Authenticator, KeyStore, RateLimiter
 from agentweb.browser import BrowserEngine
+from agentweb.browser_pool import BrowserProcessPool
 from agentweb.credentials import BrowserCredentialStore
 from agentweb.crawler import Crawler
 from agentweb.engine import AgentWebEngine
@@ -1334,6 +1335,25 @@ class AgentWebTests(unittest.TestCase):
             self.assertNotIn("secret", raised.exception.read().decode())
         finally:
             stop_test_server(server, thread)
+
+    def test_browser_process_pool_configuration_and_lifecycle(self):
+        browser = BrowserEngine(process_workers=2, session_timeout=1)
+        self.assertEqual(browser.process_workers, 2)
+        self.assertIsInstance(browser._process_pool, BrowserProcessPool)
+        self.assertEqual(browser._process_pool.workers, 2)
+        browser.close()
+        self.assertIsNone(browser._process_pool)
+        direct = BrowserEngine(process_workers=0, session_timeout=1)
+        self.assertEqual(direct.process_workers, 0)
+        self.assertIsNone(direct._process_pool)
+
+    def test_browser_process_pool_preserves_unavailable_error(self):
+        browser = BrowserEngine(executable_path="/does/not/exist", process_workers=1, session_timeout=1)
+        try:
+            with self.assertRaises(BrowserUnavailableError):
+                browser.open(self.url)
+        finally:
+            browser.close()
 
     def test_browser_worker_pool_rejects_capacity_overflow(self):
         browser = BrowserEngine(max_workers=1, session_timeout=0.01)

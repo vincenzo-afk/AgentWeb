@@ -39,6 +39,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Memory reuse | SQLite stores immutable content versions, hashes, monitor state, crawl history, and explicit diffs, all scoped by organization. |
 | Authentication and limits | Bearer keys support endpoint scopes; persistent keys are PBKDF2-hashed, organization-scoped, revocable, briefly cached, and protected by per-identity rate limits. |
 | Observability | Each solve, browser, and monitor operation records secret-safe organization-scoped spans retrievable through `/report/{execution_id}`. |
+| Browser execution | `POST /browser/sessions` renders JavaScript pages through fresh contexts and a bounded lazily spawned browser-worker pool; worker failures remain typed and retryable, and credentials/session state are not persisted. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
@@ -118,6 +119,7 @@ Configuration is provided through environment variables and CLI flags. No secret
 | `AGENTWEB_ALLOW_PRIVATE_TARGETS` | unset | Test-only override for local fixture servers; do not enable in a network-facing deployment. |
 | `AGENTWEB_QUIET` | unset | Set to `1` to suppress request logs. |
 | `AGENTWEB_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed for CORS; wildcard CORS is retained only for unauthenticated local development. |
+| `AGENTWEB_BROWSER_PROCESS_WORKERS` | `1` | Bounded spawned browser-worker process count; set to `0` for direct in-process execution, capped at 8. |
 | `AGENTWEB_ENV` | `development` | Runtime environment: `development`, `staging`, or `production`; non-development environments fail closed on local-only secrets. |
 | `AGENTWEB_SECRET_PROVIDER` | `env` in development | Secret source: `env`, injected `mapping` for tests, or a command-backed provider. Staging/production must not use `env`. |
 | `AGENTWEB_SECRET_COMMAND` | unset | Executable used by the command provider; it receives only the secret name and returns the value on stdout. |
@@ -216,7 +218,7 @@ flowchart LR
     Scheduler --> Monitor
 ```
 
-The longer-term architecture adds richer planning, routing, graph reasoning, and synthesis layers. Rendered browser execution, durable scheduled monitor jobs, durable crawl history, and optional coordinator-backed crawl throttling are implemented as bounded local-first foundations; a dedicated multi-process browser pool and full relational runtime cutover remain future work.
+The longer-term architecture adds richer planning, routing, graph reasoning, and synthesis layers. Rendered browser execution, durable scheduled monitor jobs, durable crawl history, optional coordinator-backed crawl throttling, and a bounded spawned browser-worker pool are implemented as local-first foundations; persistent authenticated session state and full relational runtime cutover remain future work.
 
 ## Data and persistence
 
@@ -249,7 +251,7 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 ## Current limitations
 
-This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, LLM-based synthesis, graph storage, or a full relational runtime cutover.
+This repository does not yet implement persistent authenticated browser session state, CAPTCHA/MFA automation, LLM-based synthesis, graph storage, or a full relational runtime cutover.
  External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, and transaction-scoped import are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
  Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
@@ -257,7 +259,7 @@ These limitations are explicit so the repository's runnable behavior remains dis
 
 ## Roadmap
 
-The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline and several Phase 1 foundations, including bounded durable crawling and scheduled monitoring. Future phases cover multi-process browser execution, connector registry expansion, graph reasoning, agent-native execution APIs, and event-driven workflows.
+The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline and several Phase 1 foundations, including bounded durable crawling, scheduled monitoring, and process-isolated browser execution. Future phases cover authenticated browser session-state controls, connector registry expansion, graph reasoning, agent-native execution APIs, and event-driven workflows.
 
 ## Contributing
 

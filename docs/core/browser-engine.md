@@ -4,15 +4,22 @@ The browser layer enables rendering, interaction, navigation, and extraction fro
 
 ## Capabilities
 
-- Full page rendering (JS execution)
-- Interaction primitives: click, type, scroll, wait-for-selector
-- Multi-step navigation flows
-- Screenshot/DOM-based extraction hooks (feeds into [Extraction](extraction.md))
+- Full page rendering with JavaScript execution.
+- Interaction primitives: click, type, scroll, wait-for-selector, and credential-backed form filling.
+- Multi-step navigation flows.
+- Screenshot/DOM-based extraction hooks that feed into [Extraction](extraction.md).
+- A bounded, lazily created spawned process pool for browser work, with worker recycling and explicit shutdown.
 
 ## Isolation
 
-Each browser session runs sandboxed per request; see [security/sandboxing.md](../security/sandboxing.md) for the isolation model and [security/threat-model.md](../security/threat-model.md) for the risks this mitigates (arbitrary third-party JS execution).
+Each browser session creates a fresh context and executes in a bounded browser-worker process. The process boundary limits browser-runtime failures and prevents browser state from leaking between requests. HTTP(S) egress is restricted to the target origin and same-origin resources by default; see [security/sandboxing.md](../security/sandboxing.md) for the isolation model and [security/threat-model.md](../security/threat-model.md) for the risks this mitigates, including arbitrary third-party JavaScript execution.
+
+Credentials are resolved only for the isolated session through an opaque tenant-scoped credential reference. Raw credential values are rejected in action payloads, and credential material is scrubbed from output, errors, and persisted traces. Cookies, browser storage, and session state are not persisted between requests. Authenticated session-state reuse remains intentionally outside this milestone.
+
+## Process-pool configuration
+
+The default `AGENTWEB_BROWSER_PROCESS_WORKERS=1` setting uses one spawned browser worker. The value is bounded to eight. Set it to `0` to use the direct in-process path for constrained local environments. The existing `AGENTWEB_BROWSER_WORKERS` semaphore continues to bound concurrent API requests independently of process count. Worker processes are created lazily, recycled after a bounded task count, terminated on session timeout, and closed when the engine is explicitly shut down.
 
 ## When the router chooses browser vs. static fetch
 
-The [Router](router.md) prefers a static fetch when possible (cheaper, faster) and escalates to a browser session when a page requires JS rendering, login/interaction flows, or dynamic content that a static fetch would miss. See [guides/using-browser-workflows.md](../guides/using-browser-workflows.md).
+The [Router](router.md) prefers a static fetch when possible because it is cheaper and faster, and escalates to a browser session when a page requires JavaScript rendering, login/interaction flows, or dynamic content that a static fetch would miss. See [guides/using-browser-workflows.md](../guides/using-browser-workflows.md).

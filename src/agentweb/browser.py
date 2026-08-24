@@ -11,7 +11,8 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urlparse
 
-from .errors import BrowserActionError, BrowserTimeoutError, BrowserUnavailableError, InvalidRequestError
+from .browser_pool import BrowserProcessPool
+from .errors import AgentWebError, BrowserActionError, BrowserTimeoutError, BrowserUnavailableError, InvalidRequestError
 from .fetch import validate_url
 from .models import _omit_none
 from .redaction import redact_text, redact_url
@@ -47,6 +48,7 @@ class BrowserEngine:
         session_timeout: float = 90.0,
         allow_cross_origin: bool = False,
         max_workers: int | None = None,
+        process_workers: int | None = None,
     ) -> None:
         self.trust_engine = trust_engine or TrustEngine()
         self.executable_path = executable_path or os.getenv("AGENTWEB_CHROMIUM_PATH")
@@ -59,6 +61,12 @@ class BrowserEngine:
         except (TypeError, ValueError):
             workers = 2
         self.max_workers = max(1, min(workers, 16))
+        configured_process_workers = os.getenv("AGENTWEB_BROWSER_PROCESS_WORKERS", "1") if process_workers is None else process_workers
+        try:
+            self.process_workers = max(0, min(int(configured_process_workers), 8))
+        except (TypeError, ValueError):
+            self.process_workers = 1
+        self._process_pool = BrowserProcessPool(self.process_workers) if self.process_workers else None
         self._worker_slots = threading.BoundedSemaphore(self.max_workers)
 
     @contextmanager
@@ -80,6 +88,33 @@ class BrowserEngine:
         return None
 
     def open(self, url: str, actions: list[dict] | None = None, credential: dict[str, str] | None = None) -> BrowserSession:
+        if self._process_pool is None:
+            return self._open_in_process(url, actions, credential)
+        validate_url(url)
+        decision = self.trust_engine.should_fetch(url)
+        if not decision.allowed:
+            raise BrowserActionError(decision.reason or "URL rejected by trust engine")
+        requested_actions = actions or []
+        if not isinstance(requested_actions, list):
+            raise InvalidRequestError("actions must be a JSON array")
+        if len(requested_actions) > 20:
+            raise InvalidRequestError("browser action count cannot exceed 20")
+        if any(isinstance(action, dict) and "credentials" in action for action in requested_actions):
+            raise InvalidRequestError("credentials are not accepted in browser actions")
+        payload = {
+            "url": url,
+            "actions": requested_actions,
+            "credential": credential,
+            "executable_path": self.executable_path,
+            "action_timeout": self.action_timeout,
+            "session_timeout": self.session_timeout,
+            "allow_cross_origin": self.allow_cross_origin,
+            "blocked_domains": sorted(self.trust_engine.blocked_domains),
+        }
+        with self._worker_slot():
+            return self._process_pool.run(payload, self.session_timeout + self.action_timeout)
+
+    def _open_in_process(self, url: str, actions: list[dict] | None = None, credential: dict[str, str] | None = None) -> BrowserSession:
         """Render a URL and run documented actions, returning partial results on action failure."""
         validate_url(url)
         requested_url = url
@@ -187,6 +222,23 @@ class BrowserEngine:
                 if browser is not None:
                     browser.close()
         return session
+
+    def close(self) -> None:
+        if self._process_pool is not None:
+            self._process_pool.close()
+            self._process_pool = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     @staticmethod
     def _scrub(value, credential):
