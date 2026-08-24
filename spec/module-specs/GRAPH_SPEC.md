@@ -17,4 +17,4 @@ See [../data/ER_DIAGRAM.md](../data/ER_DIAGRAM.md) for the entity-relationship s
 Edge confidence increases with independent-source corroboration and recency; single-source, stale edges are down-weighted in query results but not deleted, preserving historical traceability.
 
 ## Status
-Post-MVP (see [docs/roadmap.md](../../docs/roadmap.md) Phase 2).
+Implemented as an initial bounded local-first Phase 2 slice. Tenant-scoped storage, provenance, corroboration-aware confidence, bounded multi-hop queries, name anchors, graph-assisted solve context, ingestion, and cursor pagination are covered by runtime tests. Calibrated graph quality and general availability remain evaluation/deployment work (see [docs/roadmap.md](../../docs/roadmap.md) Phase 2).

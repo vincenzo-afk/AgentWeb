@@ -15,4 +15,4 @@ Supports multi-hop, relationship-aware queries (e.g., "competitors of X that rai
 
 ## Status
 
-Post-MVP; see [roadmap.md](../roadmap.md) Phase 2. Early internal versions may be limited to a narrow set of entity/relationship types before general availability.
+Implemented as an initial bounded local-first Phase 2 slice. The current runtime supports tenant-scoped SQLite entities and relations, provenance, corroboration-aware confidence, bounded one-to-three-hop traversal, case-insensitive name anchors, graph-assisted solve context, and cursor pagination. The implementation remains intentionally conservative about entity resolution and does not claim calibrated graph quality or general availability; those require an approved evaluation dataset and deployment plan. See [roadmap.md](../roadmap.md) Phase 2 and [../api/reference/graph.md](../api/reference/graph.md).
