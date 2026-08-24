@@ -249,7 +249,7 @@ class AgentWebEngine:
 
             raise
 
-    def extract(self, url: str, requested_schema: dict | None = None) -> dict:
+    def extract(self, url: str, requested_schema: dict | None = None, org_id: str = "development") -> dict:
         validate_url(url)
         decision = self.trust_engine.should_fetch(url)
         if not decision.allowed:
@@ -305,6 +305,9 @@ class AgentWebEngine:
             data["data"] = structured
             data["field_confidence"].update({field: value["confidence"] for field, value in structured.items()})
             data["confidence"] = round(sum(data["field_confidence"].values()) / len(data["field_confidence"]), 2)
+        data["graph_ingestion"] = self.graph.ingest_document(
+            result.url, title, parsed.entities, self._source_id(result.url), org_id, self._trust_score(result.url, title)
+        )
         return data
 
     def create_plan(
@@ -840,6 +843,9 @@ class AgentWebEngine:
         parsed = parse(result.body.encode("utf-8"), result.content_type)
         content = parsed.text or html_to_text(result.body)
         structured_data = self._structured_projection(parsed, content)
+        self.graph.ingest_document(
+            result.url, parsed.title, parsed.entities, self._source_id(result.url), monitor.org_id, self._trust_score(result.url, parsed.title)
+        )
         previous = self.memory.get_latest(monitor.target_url, monitor.org_id)
         snapshot_changed = self.memory.save_snapshot(
             key=monitor.target_url,

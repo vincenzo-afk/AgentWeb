@@ -294,6 +294,35 @@ class GraphStore:
                 raise RuntimeError("relation upsert failed")
             return self._relation(result)
 
+    def ingest_document(
+        self,
+        url: str,
+        title: str,
+        entities: list[str],
+        source_id: str,
+        org_id: str = "development",
+        trust_score: float = 0.5,
+    ) -> dict[str, int]:
+        """Ingest parser entity mentions while retaining source provenance."""
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string")
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValueError("source_id must be a non-empty string")
+        page = self.upsert_entity(
+            {"type": "Page", "name": title.strip() if isinstance(title, str) and title.strip() else url.strip(), "attributes": {"url": url.strip()}, "confidence": trust_score, "source_ids": [source_id]},
+            org_id,
+        )
+        entity_count = 0
+        relation_count = 0
+        for value in list(dict.fromkeys(entities or []))[:50]:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            entity = self.upsert_entity({"type": "Mention", "name": value.strip(), "confidence": min(0.9, max(0.2, trust_score)), "source_ids": [source_id]}, org_id)
+            self.upsert_relation(page.id, entity.id, "mentions", min(0.9, max(0.2, trust_score)), org_id, [source_id])
+            entity_count += 1
+            relation_count += 1
+        return {"pages": 1, "entities": entity_count, "relations": relation_count}
+
     @staticmethod
     def _query_confidence(row: sqlite3.Row) -> float:
         base = float(row["confidence"])

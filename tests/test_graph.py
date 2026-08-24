@@ -59,6 +59,14 @@ class GraphStoreTests(unittest.TestCase):
         self.assertEqual({edge.relation for edge in result.edges}, {"works_on", "contains"})
         self.assertEqual({node.name for node in result.nodes}, {"Ada", "Graph", "AgentWeb"})
 
+    def test_document_ingestion_creates_provenance_edges(self) -> None:
+        counts = self.store.ingest_document("https://example.com/page", "Example Page", ["Acme", "Widget", "Acme"], "src_page", "org_a", 0.8)
+        self.assertEqual(counts, {"pages": 1, "entities": 2, "relations": 2})
+        result = self.store.query(entity_type="Page", related_to="Example Page", org_id="org_a")
+        self.assertEqual(len(result.edges), 2)
+        self.assertEqual({node.type for node in result.nodes}, {"Page", "Mention"})
+        self.assertTrue(all("src_page" in node.source_ids for node in result.nodes))
+
     def test_solve_can_use_graph_context_as_grounded_sources(self) -> None:
         ada = self.store.upsert_entity({"type": "Person", "name": "Ada", "attributes": {"role": "founder"}}, "development")
         project = self.store.upsert_entity({"type": "Project", "name": "Graph"}, "development")

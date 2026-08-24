@@ -605,7 +605,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 query = payload.get("query", "")
                 response_payload = {"query": query, "results": search(query, payload.get("limit", 10), payload.get("freshness"), self.engine.search_provider)}
             elif path == "/extract":
-                response_payload = self.engine.extract(payload.get("url", ""), payload.get("schema"))
+                response_payload = self.engine.extract(payload.get("url", ""), payload.get("schema"), principal.org_id)
             elif path == "/crawl":
                 result = self.engine.crawler.crawl(
                     payload.get("start_url", ""), payload.get("max_pages", 50), payload.get("depth", 2), payload.get("url_pattern"), principal.org_id
