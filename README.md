@@ -41,6 +41,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Observability | Each solve, browser, and monitor operation records secret-safe organization-scoped spans retrievable through `/report/{execution_id}`. |
 | Browser execution | `POST /browser/sessions` renders JavaScript pages through fresh contexts and a bounded lazily spawned browser-worker pool; worker failures remain typed and retryable. Authorized operators can provision encrypted, origin-bound storage state and reuse it through opaque `session_state_id` references without exposing tokens. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys and browser credentials/session states, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
+| Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; `GET /graph/query` supports entity, relation, and related-node filters. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
 
@@ -173,6 +174,9 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `DELETE` | `/admin/browser-session-states/{id}` | Revoke encrypted browser session state; requires `admin:*`. |
 | `GET` | `/memory/{target}` | List immutable snapshots for a target. |
 | `GET` | `/memory/{target}/diff` | Compare two stored snapshots using `from` and `to` hashes. |
+| `GET` | `/graph/query` | Query tenant-scoped graph nodes and edges using optional `entity_type`, `related_to`, `relation`, and `limit` filters; requires `graph:read`. |
+| `POST` | `/graph/entities` | Create or merge a graph entity; requires `graph:write` and supports `Idempotency-Key`. |
+| `POST` | `/graph/relations` | Create or corroborate a graph relation; requires `graph:write` and supports `Idempotency-Key`. |
 | `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace belonging to the caller's organization. |
 | `GET` | `/report/{execution_id}/replay` | Retrieve an ordered, read-only historical replay projection with sanitized summaries; no network calls or side effects are performed. |
 | `GET` | `/admin/keys` | List redacted, cursor-paginated API keys for the caller's organization; requires `admin:*`. |
@@ -259,7 +263,7 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 ## Current limitations
 
-This repository does not yet implement CAPTCHA/MFA automation, LLM-based synthesis, graph storage, or a full relational runtime cutover.
+This repository does not yet implement CAPTCHA/MFA automation, LLM-based synthesis, or a full relational runtime cutover.
   External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, transaction-scoped import, and coordinator-aware retention scheduling are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter.
  Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
  Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
@@ -268,7 +272,7 @@ These limitations are explicit so the repository's runnable behavior remains dis
 
 ## Roadmap
 
-The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline and several Phase 1 foundations, including bounded durable crawling, scheduled monitoring, process-isolated browser execution, and encrypted reusable browser session state. Future phases cover connector registry expansion, graph reasoning, agent-native execution APIs, and event-driven workflows.
+The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline, several Phase 1 foundations, and a first Phase 2 graph storage/query slice, including bounded durable crawling, scheduled monitoring, process-isolated browser execution, encrypted reusable browser session state, tenant-scoped graph entities/relations, and corroboration-aware graph confidence. Future phases cover graph-aware synthesis, connector registry expansion, vector retrieval, and event-driven workflows.
 
 ## Contributing
 

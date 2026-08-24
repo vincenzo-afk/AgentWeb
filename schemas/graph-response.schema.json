@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GraphResponse",
+  "type": "object",
+  "required": ["nodes", "edges"],
+  "properties": {
+    "_meta": {
+      "type": "object",
+      "required": ["request_id", "api_version", "path", "deprecated"],
+      "properties": {
+        "request_id": {"type": "string"},
+        "api_version": {"type": "string", "const": "v1"},
+        "path": {"type": "string"},
+        "deprecated": {"type": "boolean"}
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/GraphEntity"}
+    },
+    "edges": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/GraphRelation"}
+    }
+  },
+  "definitions": {
+    "GraphEntity": {
+      "type": "object",
+      "required": ["id", "type", "name", "attributes", "confidence", "source_ids"],
+      "properties": {
+        "id": {"type": "string"},
+        "org_id": {"type": "string"},
+        "type": {"type": "string"},
+        "name": {"type": "string"},
+        "attributes": {"type": "object"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "source_ids": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string"},
+        "updated_at": {"type": "string"}
+      }
+    },
+    "GraphRelation": {
+      "type": "object",
+      "required": ["id", "from", "to", "relation", "confidence", "source_ids", "observations"],
+      "properties": {
+        "id": {"type": "string"},
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "relation": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "source_ids": {"type": "array", "items": {"type": "string"}},
+        "observations": {"type": "integer", "minimum": 1},
+        "created_at": {"type": "string"},
+        "updated_at": {"type": "string"}
+      }
+    }
+  }
+}

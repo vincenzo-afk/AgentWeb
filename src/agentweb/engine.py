@@ -16,6 +16,7 @@ from .browser_sessions import BrowserSessionStore
 from .crawler import Crawler
 from .credentials import BrowserCredentialStore
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
+from .graph import GraphStore
 from .memory import MemoryStore
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
@@ -47,6 +48,7 @@ class AgentWebEngine:
         queue_coordinator: object | None = None,
     ) -> None:
         self.memory = memory or MemoryStore()
+        self.graph = GraphStore(self.memory.path)
         self.queue_coordinator = queue_coordinator
         metric_backend = (
             PostgresMetricStore(queue_coordinator)

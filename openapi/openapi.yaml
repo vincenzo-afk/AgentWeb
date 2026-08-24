@@ -369,6 +369,79 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '503':
           description: Browser runtime unavailable
+  /graph/query:
+    get:
+      summary: Query the tenant knowledge graph
+      operationId: queryGraph
+      parameters:
+        - name: entity_type
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+        - name: related_to
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+        - name: relation
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Matching graph nodes and corroboration-aware edges
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphResponse'
+  /graph/entities:
+    post:
+      summary: Upsert an organization-scoped graph entity
+      operationId: upsertGraphEntity
+      security:
+        - bearerAuth: [graph:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GraphEntityInput'
+      responses:
+        '201':
+          description: Created or merged graph entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphEntity'
+  /graph/relations:
+    post:
+      summary: Upsert an organization-scoped graph relation
+      operationId: upsertGraphRelation
+      security:
+        - bearerAuth: [graph:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GraphRelationInput'
+      responses:
+        '201':
+          description: Created or corroborated graph relation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphRelation'
   /admin/keys:
     get:
       summary: List redacted API keys for the authenticated organization
@@ -745,6 +818,95 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    GraphEntityInput:
+      type: object
+      required: [type, name]
+      properties:
+        id:
+          type: string
+          pattern: '^ent_[A-Za-z0-9_-]+$'
+        type:
+          type: string
+          minLength: 1
+          maxLength: 120
+        name:
+          type: string
+          minLength: 1
+          maxLength: 500
+        attributes:
+          type: object
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        source_ids:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            minLength: 1
+    GraphRelationInput:
+      type: object
+      required: [from_id, to_id, relation]
+      properties:
+        from_id:
+          type: string
+        to_id:
+          type: string
+        relation:
+          type: string
+          minLength: 1
+          maxLength: 120
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        source_ids:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            minLength: 1
+    GraphEntity:
+      type: object
+      required: [id, type, name, attributes, confidence, source_ids]
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        type: { type: string }
+        name: { type: string }
+        attributes: { type: object }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        source_ids: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    GraphRelation:
+      type: object
+      required: [id, from, to, relation, confidence, source_ids, observations]
+      properties:
+        id: { type: string }
+        from: { type: string }
+        to: { type: string }
+        relation: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        source_ids: { type: array, items: { type: string } }
+        observations: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    GraphResponse:
+      type: object
+      required: [nodes, edges]
+      properties:
+        _meta:
+          $ref: '#/components/schemas/ResponseMetadata'
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEntity'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphRelation'
     ResponseMetadata:
       type: object
       description: Request-scoped metadata included in every successful JSON object response.

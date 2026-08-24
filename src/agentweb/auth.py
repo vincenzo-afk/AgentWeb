@@ -27,6 +27,7 @@ ALL_SCOPES = {
     "observe:manage",
     "memory:read",
     "graph:read",
+    "graph:write",
     "admin:*",
 }
 

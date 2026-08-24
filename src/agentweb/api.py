@@ -81,6 +81,16 @@ def _audit_filter(query: dict[str, list[str]], name: str) -> str | None:
     return value
 
 
+def _query_value(query: dict[str, list[str]], name: str) -> str | None:
+    raw = query.get(name, [None])[0]
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value or len(value) > 200:
+        raise InvalidRequestError(f"{name} must contain between 1 and 200 characters")
+    return value
+
+
 def _page_window(query: dict[str, list[str]]) -> tuple[int, int]:
     try:
         limit = int(query.get("limit", ["50"])[0])
@@ -301,6 +311,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             scope = "admin:*"
         elif path.startswith(("/memory/", "/report/")):
             scope = "memory:read"
+        elif path.startswith("/graph"):
+            scope = "graph:read"
         elif path.startswith("/crawl"):
             scope = "search:read"
         else:
@@ -324,6 +336,17 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     raise NotFoundError("crawl not found")
                 pages = self.engine.memory.list_crawl_pages(crawl_id, principal.org_id, limit=100)
                 self._send_json(HTTPStatus.OK, {**crawl, "pages": pages, "data": pages}, request_id)
+                return
+            if path == "/graph/query":
+                limit, _ = _page_window(query)
+                graph_result = self.engine.graph.query(
+                    entity_type=_query_value(query, "entity_type"),
+                    related_to=_query_value(query, "related_to"),
+                    relation=_query_value(query, "relation"),
+                    org_id=principal.org_id,
+                    limit=limit,
+                )
+                self._send_json(HTTPStatus.OK, self._decorate_success_payload(graph_result.to_dict(), request_id), request_id)
                 return
             if path == "/observe":
                 monitors, next_cursor, has_more = _page(self.engine.memory.list_monitors(principal.org_id), query)
@@ -500,6 +523,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             "/search": "search:read",
             "/extract": "extract:read",
             "/crawl": "search:read",
+            "/graph/entities": "graph:write",
+            "/graph/relations": "graph:write",
             "/browser/sessions": "browser:execute",
             "/admin/keys": "admin:*",
             "/admin/browser-credentials": "admin:*",
@@ -515,7 +540,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json()
-            if path in {"/solve", "/execute", "/observe", "/crawl", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
+            if path in {"/solve", "/execute", "/observe", "/crawl", "/graph/entities", "/graph/relations", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
@@ -560,6 +585,19 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     payload.get("start_url", ""), payload.get("max_pages", 50), payload.get("depth", 2), payload.get("url_pattern"), principal.org_id
                 )
                 response_payload = result.to_dict()
+            elif path == "/graph/entities":
+                response_status = HTTPStatus.CREATED
+                response_payload = self.engine.graph.upsert_entity(payload, principal.org_id).to_dict()
+            elif path == "/graph/relations":
+                response_status = HTTPStatus.CREATED
+                response_payload = self.engine.graph.upsert_relation(
+                    payload.get("from_id", payload.get("from", "")),
+                    payload.get("to_id", payload.get("to", "")),
+                    payload.get("relation", payload.get("type", "")),
+                    payload.get("confidence", 0.5),
+                    principal.org_id,
+                    payload.get("source_ids", payload.get("source_id")),
+                ).to_dict()
             elif path == "/browser/sessions":
                 session = self.engine.browser_open(payload.get("url", ""), payload.get("actions", []), principal.org_id, payload.get("credential_id"), payload.get("session_state_id"))
                 response_payload = session.to_dict()

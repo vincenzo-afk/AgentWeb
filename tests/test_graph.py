@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import threading
+import unittest
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from agentweb.api import create_server
+from agentweb.graph import GraphStore
+
+
+class GraphStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.store = GraphStore(Path(self.temp_dir.name) / "graph.sqlite3")
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_upserts_merge_sources_and_query_confidence(self) -> None:
+        acme = self.store.upsert_entity({"type": "Company", "name": "Acme", "confidence": 0.7, "source_id": "src_a"}, "org_a")
+        product = self.store.upsert_entity({"type": "Product", "name": "Widget", "confidence": 0.8, "source_ids": ["src_a", "src_b"]}, "org_a")
+        first = self.store.upsert_relation(acme.id, product.id, "produces", 0.6, "org_a", "src_a")
+        second = self.store.upsert_relation(acme.id, product.id, "produces", 0.65, "org_a", "src_b")
+
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(second.observations, 2)
+        result = self.store.query(entity_type="Company", relation="produces", org_id="org_a")
+        self.assertEqual([node.name for node in result.nodes], ["Acme", "Widget"])
+        self.assertEqual(len(result.edges), 1)
+        self.assertEqual(result.edges[0].source_ids, ["src_a", "src_b"])
+        self.assertGreater(result.edges[0].confidence, 0.65)
+
+    def test_queries_are_tenant_scoped_and_support_related_to(self) -> None:
+        left = self.store.upsert_entity({"type": "Person", "name": "Ada"}, "org_a")
+        right = self.store.upsert_entity({"type": "Project", "name": "Graph"}, "org_a")
+        other = self.store.upsert_entity({"type": "Project", "name": "Graph"}, "org_b")
+        self.store.upsert_relation(left.id, right.id, "works_on", 0.9, "org_a")
+        result = self.store.query(related_to=right.id, org_id="org_a")
+        self.assertEqual(len(result.edges), 1)
+        self.assertEqual({node.id for node in result.nodes}, {left.id, right.id})
+        self.assertEqual(self.store.query(related_to=other.id, org_id="org_a").edges, [])
+
+
+class GraphApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "api.sqlite3"))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+        self.temp_dir.cleanup()
+
+    def request(self, method: str, path: str, payload: dict | None = None) -> tuple[int, dict, dict[str, str]]:
+        body = None if payload is None else json.dumps(payload).encode()
+        request = Request(self.base_url + path, data=body, method=method, headers={"Content-Type": "application/json"})
+        try:
+            with urlopen(request, timeout=3) as response:
+                return response.status, json.loads(response.read()), dict(response.headers)
+        except HTTPError as error:
+            return error.code, json.loads(error.read()), dict(error.headers)
+
+    def test_canonical_graph_routes_and_metadata(self) -> None:
+        status, acme, headers = self.request("POST", "/v1/graph/entities", {"type": "Company", "name": "Acme"})
+        self.assertEqual(status, 201)
+        self.assertEqual(acme["type"], "Company")
+        self.assertEqual(acme["_meta"]["api_version"], "v1")
+        status, product, _ = self.request("POST", "/v1/graph/entities", {"type": "Product", "name": "Widget"})
+        self.assertEqual(status, 201)
+        status, relation, _ = self.request(
+            "POST",
+            "/v1/graph/relations",
+            {"from_id": acme["id"], "to_id": product["id"], "relation": "produces", "confidence": 0.8},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(relation["relation"], "produces")
+        status, result, headers = self.request("GET", "/v1/graph/query?entity_type=Company&relation=produces")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(result["edges"]), 1)
+        self.assertEqual(len(result["nodes"]), 2)
+        self.assertEqual(result["_meta"]["path"], "/v1/graph/query")
+        self.assertIn("X-AgentWeb-API-Version", headers)
+
+    def test_invalid_graph_relation_is_a_client_error(self) -> None:
+        status, payload, _ = self.request("POST", "/v1/graph/relations", {"from_id": "ent_missing", "to_id": "ent_other", "relation": "links"})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["type"], "invalid_request")
+
+
+if __name__ == "__main__":
+    unittest.main()

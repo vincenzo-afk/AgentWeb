@@ -5,6 +5,7 @@ from .browser import BrowserEngine, BrowserSession
 from .browser_sessions import BrowserSessionStore
 from .credentials import BrowserCredentialStore
 from .engine import AgentWebEngine
+from .graph import Entity, GraphResult, GraphStore, Relation
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from .planner import Plan, PlanStep, PlanStore, Planner, StoredPlan
@@ -18,6 +19,10 @@ from .synthesis import SynthesisResult, synthesize
 
 __all__ = [
     "AgentWebEngine",
+    "Entity",
+    "GraphResult",
+    "GraphStore",
+    "Relation",
     "MetricStore",
     "MetricsRegistry",
     "PostgresMetricStore",
