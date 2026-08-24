@@ -20,8 +20,9 @@ from agentweb.api import create_server
 from agentweb.auth import Authenticator, KeyStore, RateLimiter
 from agentweb.browser import BrowserEngine
 from agentweb.credentials import BrowserCredentialStore
+from agentweb.crawler import Crawler
 from agentweb.engine import AgentWebEngine
-from agentweb.errors import AuthenticationError, BrowserUnavailableError, PermissionError
+from agentweb.errors import AuthenticationError, BrowserUnavailableError, PermissionError, RateLimitError
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.maintenance import purge_retention
@@ -890,21 +891,97 @@ class AgentWebTests(unittest.TestCase):
         finally:
             stop_test_server(server, thread)
 
+    def test_crawler_persists_page_metadata_and_is_tenant_scoped(self):
+        original = FixtureHandler.body
+        FixtureHandler.body = b"<html><head><title>Catalog</title></head><body><a href='/next'>Next</a><table><tr><th>Item</th><th>Price</th></tr><tr><td>Alpha</td><td>$10</td></tr></table></body></html>"
+        try:
+            result = self.engine.crawler.crawl(self.url, max_pages=2, depth=1, org_id="org-a")
+            self.assertIsNotNone(result.crawl_id)
+            crawl = self.store.get_crawl(result.crawl_id, "org-a")
+            self.assertEqual(crawl["status"], "completed")
+            self.assertEqual(crawl["pages_crawled"], 2)
+            pages = self.store.list_crawl_pages(result.crawl_id, "org-a")
+            self.assertEqual(len(pages), 2)
+            self.assertEqual(pages[0]["title"], "Catalog")
+            self.assertIsNotNone(pages[0]["content_hash"])
+            self.assertIsNone(self.store.get_crawl(result.crawl_id, "org-b"))
+            self.assertEqual(self.store.list_crawl_pages(result.crawl_id, "org-b"), [])
+            self.assertNotIn("Catalog", json.dumps(self.store.export_debug("org-b")))
+            self.assertEqual(self.store.delete_crawls("org-a", result.crawl_id), 1)
+            self.assertIsNone(self.store.get_crawl(result.crawl_id, "org-a"))
+            self.assertEqual(self.store.list_crawl_pages(result.crawl_id, "org-a"), [])
+        finally:
+            FixtureHandler.body = original
+
+    def test_crawler_rate_limit_rejection_persists_retryable_run_state(self):
+        class RejectingCoordinator:
+            def consume_rate_limit(self, *args):
+                raise RateLimitError("crawl quota exceeded", retry_after=7)
+
+        crawler = Crawler(self.engine.trust_engine, rate_limit_interval=0, memory=self.store, coordinator=RejectingCoordinator())
+        with self.assertRaises(RateLimitError) as raised:
+            crawler.crawl(self.url, max_pages=1, depth=0, org_id="org-a")
+        self.assertEqual(raised.exception.retry_after, 7)
+        runs = self.store.list_crawls("org-a")
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["status"], "rate_limited")
+        self.assertEqual(runs[0]["pages_crawled"], 0)
+
+    def test_crawler_uses_shared_organization_rate_limit_bucket(self):
+        class Coordinator:
+            def __init__(self):
+                self.calls = []
+
+            def consume_rate_limit(self, *args):
+                self.calls.append(args)
+                return {"remaining": 59.0, "reset": time.time() + 1}
+
+        coordinator = Coordinator()
+        crawler = Crawler(self.engine.trust_engine, rate_limit_interval=0, memory=None, coordinator=coordinator)
+        result = crawler.crawl(self.url, max_pages=1, depth=0, org_id="org-a")
+        self.assertEqual(result.pages_crawled, 1)
+        self.assertEqual(coordinator.calls[0][0], "org-a")
+        self.assertEqual(coordinator.calls[0][1], f"crawl:127.0.0.1:{self.fixture.server_port}")
+        self.assertEqual(coordinator.calls[0][2:], (1.0, 60.0, 1.0))
+
     def test_http_crawl_route_returns_bounded_pages(self):
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "crawl.sqlite3"))
         thread = start_test_server(server)
         try:
             body = json.dumps({"start_url": self.url, "max_pages": 2, "depth": 1}).encode()
+            admin_a = server.authenticator.key_store.create_key("org-a", ["search:read", "admin:*"])['secret']
+            admin_b = server.authenticator.key_store.create_key("org-b", ["search:read"])['secret']
+            headers = {"Content-Type": "application/json", "Authorization": "Bearer " + admin_a}
             request = Request(
                 f"http://127.0.0.1:{server.server_port}/crawl",
                 data=body,
                 method="POST",
-                headers={"Content-Type": "application/json"},
+                headers=headers,
             )
             with urlopen(request) as response:
                 payload = json.loads(response.read())
             self.assertEqual(payload["pages_crawled"], 2)
             self.assertFalse(payload["truncated"])
+            self.assertTrue(payload["crawl_id"].startswith("crawl_"))
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/crawl", headers={"Authorization": headers["Authorization"]})) as response:
+                history = json.loads(response.read())
+            self.assertEqual(history["data"][0]["id"], payload["crawl_id"])
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/crawl/{payload['crawl_id']}", headers=headers)) as response:
+                detail = json.loads(response.read())
+            self.assertEqual(detail["pages_crawled"], 2)
+            self.assertEqual(len(detail["pages"]), 2)
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/crawl", headers={"Authorization": "Bearer " + admin_b})) as response:
+                self.assertEqual(json.loads(response.read())["data"], [])
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/crawl/{payload['crawl_id']}", headers={"Authorization": "Bearer " + admin_b}))
+            self.assertEqual(raised.exception.code, 404)
+            delete_body = json.dumps({"kind": "crawls"}).encode()
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/data", data=delete_body, method="DELETE", headers=headers)) as response:
+                deleted = json.loads(response.read())
+            self.assertEqual(deleted["deleted_crawls"], 1)
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/crawl/{payload['crawl_id']}", headers=headers))
+            self.assertEqual(raised.exception.code, 404)
         finally:
             stop_test_server(server, thread)
 

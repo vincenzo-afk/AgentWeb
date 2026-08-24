@@ -35,7 +35,8 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Parsing and normalization | Standalone parser and normalizer modules handle HTML, JSON, text, PDF fallback warnings, prices, dates, entities, and raw-value preservation. |
 | Trust and ranking | Unsafe target classes are blocked by default; accepted sources are ranked using trust, task relevance, and corroboration signals. |
 | Monitoring | `GET /observe` lists organization monitors with cursor pagination; `POST /observe` creates an organization-scoped SQLite monitor; `GET /observe/{id}` checks its URL, records explicit `no_change`/`change_detected`/`check_failed` events, and exposes queued webhook delivery status, attempts, retries, and dead-letter failures. |
-| Memory reuse | SQLite stores immutable content versions, hashes, monitor state, and explicit diffs, all scoped by organization. |
+| Crawling | `POST /crawl` performs bounded same-origin breadth-first traversal with robots and trust checks, persists tenant-scoped run/page metadata and immutable page snapshots, and returns a durable `crawl_id`; `GET /crawl` and `GET /crawl/{id}` expose history without cross-tenant disclosure. |
+| Memory reuse | SQLite stores immutable content versions, hashes, monitor state, crawl history, and explicit diffs, all scoped by organization. |
 | Authentication and limits | Bearer keys support endpoint scopes; persistent keys are PBKDF2-hashed, organization-scoped, revocable, briefly cached, and protected by per-identity rate limits. |
 | Observability | Each solve, browser, and monitor operation records secret-safe organization-scoped spans retrievable through `/report/{execution_id}`. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
@@ -155,6 +156,9 @@ The API returns JSON. The endpoint shapes correspond to the repository's OpenAPI
 | `POST` | `/solve` | Run a grounded research task. Required field: `task`; optional fields: `mode`, `skill`, `inputs`, `webhook_url`, `idempotency_key`, and `output_format` (`text`, `comparison`, `timeline`, or `json`). |
 | `GET` | `/observe` | List organization monitors using optional `cursor` and bounded `limit` query parameters. |
 | `POST` | `/observe` | Create a monitor. Required field: `task`; optional fields: `frequency` and `webhook_url`; supports `Idempotency-Key`. |
+| `POST` | `/crawl` | Run a bounded same-origin crawl. Required field: `start_url`; optional fields: `max_pages`, `depth`, `url_pattern`, and `idempotency_key`. |
+| `GET` | `/crawl` | List tenant-scoped crawl runs using optional `cursor` and bounded `limit` query parameters. |
+| `GET` | `/crawl/{crawl_id}` | Retrieve one crawl run and its bounded page metadata. |
 | `GET` | `/observe/{id}` | Check a monitor and return its latest state. |
 | `DELETE` | `/observe/{id}` | Cancel and delete a monitor; supports `Idempotency-Key`. |
 | `POST` | `/search` | Search with required `query` and optional `limit` (maximum 50) and `freshness` (`day`, `week`, `month`, `year`, or `any`). Provider selection is configured through `AGENTWEB_SEARCH_PROVIDER`. |
@@ -212,11 +216,11 @@ flowchart LR
     Scheduler --> Monitor
 ```
 
-The longer-term architecture adds richer planning, routing, graph reasoning, and synthesis layers. Rendered browser execution and durable scheduled monitor jobs are now implemented as bounded foundations; a dedicated multi-process browser pool and distributed scheduler remain future work.
+The longer-term architecture adds richer planning, routing, graph reasoning, and synthesis layers. Rendered browser execution, durable scheduled monitor jobs, durable crawl history, and optional coordinator-backed crawl throttling are implemented as bounded local-first foundations; a dedicated multi-process browser pool and full relational runtime cutover remain future work.
 
 ## Data and persistence
 
-The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains organizations, hashed API keys, immutable content snapshots, organization-scoped monitor records, execution traces, audit events, and durable scheduler jobs with leases and retry state. The database file is ignored by Git through the repository's `.gitignore`.
+The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains organizations, hashed API keys, immutable content snapshots, organization-scoped monitor records, durable crawl runs and page metadata, execution traces, audit events, and durable scheduler jobs with leases and retry state. The database file is ignored by Git through the repository's `.gitignore`.
 
 Monitoring can be checked synchronously through `GET /observe/{id}` or asynchronously by running `agentweb --worker`. The worker claims due jobs, prioritizes minutely monitors, reschedules successful checks by frequency, retries worker failures, and records exhausted jobs as `dead_letter`.
 
@@ -245,7 +249,7 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 ## Current limitations
 
-This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, LLM-based synthesis, graph storage, a shared distributed rate limiter, or a distributed scheduler.
+This repository does not yet implement a dedicated multi-process browser worker pool, CAPTCHA/MFA automation, LLM-based synthesis, graph storage, or a full relational runtime cutover.
  External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, and transaction-scoped import are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
  Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
@@ -253,7 +257,7 @@ These limitations are explicit so the repository's runnable behavior remains dis
 
 ## Roadmap
 
-The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline and several Phase 1 foundations. Future phases cover the full crawler, rendered browser execution, connector registry, scheduled workers, graph reasoning, agent-native execution APIs, and event-driven workflows.
+The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline and several Phase 1 foundations, including bounded durable crawling and scheduled monitoring. Future phases cover multi-process browser execution, connector registry expansion, graph reasoning, agent-native execution APIs, and event-driven workflows.
 
 ## Contributing
 

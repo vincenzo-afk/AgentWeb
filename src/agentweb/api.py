@@ -267,12 +267,30 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             scope = "admin:*"
         elif path.startswith(("/memory/", "/report/")):
             scope = "memory:read"
+        elif path.startswith("/crawl"):
+            scope = "search:read"
         else:
             scope = "observe:manage"
         principal = self._authenticate(scope, request_id)
         if principal is None:
             return
         try:
+            if path == "/crawl":
+                limit, offset = _page_window(query)
+                candidates = self.engine.memory.list_crawls(principal.org_id, limit=limit + 1, offset=offset)
+                crawls = candidates[:limit]
+                has_more = len(candidates) > limit
+                next_cursor = _encode_cursor(offset + limit) if has_more else None
+                self._send_json(HTTPStatus.OK, {"data": crawls, "crawls": crawls, "next_cursor": next_cursor, "has_more": has_more}, request_id)
+                return
+            if path.startswith("/crawl/"):
+                crawl_id = path.rsplit("/", 1)[-1]
+                crawl = self.engine.memory.get_crawl(crawl_id, principal.org_id)
+                if not crawl:
+                    raise NotFoundError("crawl not found")
+                pages = self.engine.memory.list_crawl_pages(crawl_id, principal.org_id, limit=100)
+                self._send_json(HTTPStatus.OK, {**crawl, "pages": pages, "data": pages}, request_id)
+                return
             if path == "/observe":
                 monitors, next_cursor, has_more = _page(self.engine.memory.list_monitors(principal.org_id), query)
                 self._send_json(HTTPStatus.OK, {"data": monitors, "monitors": monitors, "next_cursor": next_cursor, "has_more": has_more}, request_id)
@@ -373,8 +391,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     return
             if path == "/admin/data":
                 kind = payload.get("kind", "snapshots")
-                if kind not in {"snapshots", "traces", "all"}:
-                    raise InvalidRequestError("kind must be snapshots, traces, or all")
+                if kind not in {"snapshots", "traces", "crawls", "all"}:
+                    raise InvalidRequestError("kind must be snapshots, traces, crawls, or all")
                 target = payload.get("target")
                 if target is not None and (not isinstance(target, str) or not target.strip()):
                     raise InvalidRequestError("target must be a non-empty string when provided")
@@ -383,8 +401,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     raise InvalidRequestError("execution_id must be a non-empty string when provided")
                 deleted_snapshots = self.engine.memory.delete_snapshots(principal.org_id, redact_url(target) if target and target.startswith(("http://", "https://")) else target) if kind in {"snapshots", "all"} else 0
                 deleted_traces = self.engine.traces.delete(principal.org_id, execution_id) if kind in {"traces", "all"} else 0
-                self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces})
-                response_payload = {"org_id": principal.org_id, "kind": kind, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces}
+                deleted_crawls = self.engine.memory.delete_crawls(principal.org_id) if kind in {"crawls", "all"} else 0
+                self.authenticator.key_store.audit(principal.org_id, principal.key_id, "data.deletion_requested", principal.org_id, {"kind": kind, "target": redact_url(target) if isinstance(target, str) else target, "execution_id": execution_id, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls})
+                response_payload = {"org_id": principal.org_id, "kind": kind, "deleted_snapshots": deleted_snapshots, "deleted_traces": deleted_traces, "deleted_crawls": deleted_crawls}
                 self._complete_idempotency(principal, idempotency_key, request_hash, int(HTTPStatus.OK), response_payload)
                 self._send_json(HTTPStatus.OK, response_payload, request_id)
                 return
@@ -440,7 +459,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json()
-            if path in {"/solve", "/observe", "/admin/keys", "/admin/browser-credentials"}:
+            if path in {"/solve", "/observe", "/crawl", "/admin/keys", "/admin/browser-credentials"}:
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
@@ -463,7 +482,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 response_payload = self.engine.extract(payload.get("url", ""), payload.get("schema"))
             elif path == "/crawl":
                 result = self.engine.crawler.crawl(
-                    payload.get("start_url", ""), payload.get("max_pages", 50), payload.get("depth", 2), payload.get("url_pattern")
+                    payload.get("start_url", ""), payload.get("max_pages", 50), payload.get("depth", 2), payload.get("url_pattern"), principal.org_id
                 )
                 response_payload = result.to_dict()
             elif path == "/browser/sessions":

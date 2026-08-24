@@ -215,11 +215,82 @@ paths:
                   maximum: 10
                 url_pattern:
                   type: string
+                idempotency_key:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
       responses:
         '200':
-          description: Crawled pages and truncation state
+          description: Crawled pages, bounded metadata, durable crawl identifier, and truncation state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrawlResult'
         '400':
           $ref: '#/components/responses/BadRequest'
+    get:
+      summary: List crawl runs for the authenticated organization
+      operationId: listCrawls
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Tenant-scoped crawl history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, crawls, next_cursor, has_more]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CrawlRun'
+                  crawls:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CrawlRun'
+                  next_cursor:
+                    type: string
+                    nullable: true
+                  has_more:
+                    type: boolean
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /crawl/{crawlId}:
+    get:
+      summary: Retrieve one tenant-scoped crawl run and its bounded page metadata
+      operationId: getCrawl
+      parameters:
+        - name: crawlId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Crawl run and page metadata
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CrawlRun'
+                  - type: object
+                    required: [pages, data]
+                    properties:
+                      pages:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/CrawlPage'
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/CrawlPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /browser/sessions:
     post:
       summary: Render a page and execute bounded browser actions
@@ -446,7 +517,7 @@ paths:
           $ref: '#/components/responses/Forbidden'
   /admin/data:
     delete:
-      summary: Delete organization-owned snapshots and execution traces
+      summary: Delete organization-owned snapshots, crawl history, and execution traces
       operationId: deleteOrganizationData
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -459,7 +530,7 @@ paths:
               properties:
                 kind:
                   type: string
-                  enum: [snapshots, traces, all]
+                  enum: [snapshots, traces, crawls, all]
                   default: snapshots
                 target:
                   type: string
@@ -472,7 +543,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [org_id, kind, deleted_snapshots, deleted_traces]
+                required: [org_id, kind, deleted_snapshots, deleted_traces, deleted_crawls]
                 properties:
                   org_id:
                     type: string
@@ -481,6 +552,8 @@ paths:
                   deleted_snapshots:
                     type: integer
                   deleted_traces:
+                    type: integer
+                  deleted_crawls:
                     type: integer
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -973,6 +1046,85 @@ components:
           maxLength: 128
         change_policy:
           $ref: '#/components/schemas/ChangePolicy'
+    CrawlPage:
+      type: object
+      required: [id, crawl_id, org_id, url, status, extracted, depth, parse_warnings]
+      properties:
+        id:
+          type: integer
+        crawl_id:
+          type: string
+        org_id:
+          type: string
+        url:
+          type: string
+        status:
+          type: integer
+        extracted:
+          type: boolean
+        depth:
+          type: integer
+        error:
+          type: string
+          nullable: true
+        content_hash:
+          type: string
+          nullable: true
+        content_type:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        parse_warnings:
+          type: array
+          items:
+            type: string
+    CrawlRun:
+      type: object
+      required: [id, org_id, start_url, max_pages, depth, status, pages_crawled, truncated, created_at]
+      properties:
+        id:
+          type: string
+        org_id:
+          type: string
+        start_url:
+          type: string
+        max_pages:
+          type: integer
+        depth:
+          type: integer
+        url_pattern:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [running, completed, failed, rate_limited]
+        pages_crawled:
+          type: integer
+        truncated:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+    CrawlResult:
+      type: object
+      required: [crawl_id, pages, pages_crawled, truncated]
+      properties:
+        crawl_id:
+          type: string
+        pages:
+          type: array
+          items:
+            $ref: '#/components/schemas/CrawlPage'
+        pages_crawled:
+          type: integer
+        truncated:
+          type: boolean
     ChangePolicy:
       type: object
       description: Deterministic monitor comparison policy. For structured_field, field_path and expected_type select one bounded parsed projection value; numeric thresholds are valid only for expected_type price, and required_state is valid only for availability.

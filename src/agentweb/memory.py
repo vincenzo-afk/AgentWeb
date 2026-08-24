@@ -145,6 +145,38 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_usage_org_period
                     ON usage_records(org_id, period);
+                CREATE TABLE IF NOT EXISTS crawl_runs (
+                    id TEXT PRIMARY KEY,
+                    org_id TEXT NOT NULL,
+                    start_url TEXT NOT NULL,
+                    max_pages INTEGER NOT NULL,
+                    depth INTEGER NOT NULL,
+                    url_pattern TEXT,
+                    status TEXT NOT NULL,
+                    pages_crawled INTEGER NOT NULL DEFAULT 0,
+                    truncated INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_crawl_runs_org_created
+                    ON crawl_runs(org_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS crawl_pages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    crawl_id TEXT NOT NULL,
+                    org_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    status INTEGER NOT NULL,
+                    extracted INTEGER NOT NULL,
+                    depth INTEGER NOT NULL,
+                    error TEXT,
+                    content_hash TEXT,
+                    content_type TEXT,
+                    title TEXT,
+                    parse_warnings_json TEXT,
+                    UNIQUE(crawl_id, url)
+                );
+                CREATE INDEX IF NOT EXISTS idx_crawl_pages_org_run
+                    ON crawl_pages(org_id, crawl_id, id);
                 """
             )
             snapshot_columns = {row[1] for row in connection.execute("PRAGMA table_info(snapshots)")}
@@ -171,6 +203,89 @@ class MemoryStore:
                     f"SELECT 'legacy', {target_column}, content_hash, content, captured_at, NULL FROM snapshots_legacy"
                 )
                 connection.execute("DROP TABLE snapshots_legacy")
+
+    @staticmethod
+    def _decode_crawl_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        data = dict(row)
+        data["truncated"] = bool(data.get("truncated"))
+        return data
+
+    @staticmethod
+    def _decode_crawl_page(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        raw_warnings = data.pop("parse_warnings_json", None)
+        try:
+            data["parse_warnings"] = json.loads(raw_warnings) if raw_warnings else []
+        except (TypeError, json.JSONDecodeError):
+            data["parse_warnings"] = []
+        data["extracted"] = bool(data.get("extracted"))
+        return data
+
+    def create_crawl(self, crawl_id: str, org_id: str, start_url: str, max_pages: int, depth: int, url_pattern: str | None) -> None:
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO crawl_runs(id, org_id, start_url, max_pages, depth, url_pattern, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)",
+                (crawl_id, org_id, start_url, max_pages, depth, url_pattern, created_at),
+            )
+
+    def save_crawl_page(self, crawl_id: str, org_id: str, page: dict[str, Any]) -> None:
+        warnings = page.get("parse_warnings") or []
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO crawl_pages(crawl_id, org_id, url, status, extracted, depth, error, content_hash, content_type, title, parse_warnings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    crawl_id,
+                    org_id,
+                    page.get("url", ""),
+                    int(page.get("status", 0)),
+                    1 if page.get("extracted") else 0,
+                    int(page.get("depth", 0)),
+                    page.get("error"),
+                    page.get("content_hash"),
+                    page.get("content_type"),
+                    page.get("title"),
+                    json.dumps(warnings, separators=(",", ":"), ensure_ascii=False),
+                ),
+            )
+
+    def complete_crawl(self, crawl_id: str, org_id: str, pages_crawled: int, truncated: bool, status: str) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE crawl_runs SET status=?, pages_crawled=?, truncated=?, completed_at=? WHERE id=? AND org_id=?",
+                (status, int(pages_crawled), 1 if truncated else 0, completed_at, crawl_id, org_id),
+            )
+
+    def get_crawl(self, crawl_id: str, org_id: str = "development") -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id, org_id, start_url, max_pages, depth, url_pattern, status, pages_crawled, truncated, created_at, completed_at FROM crawl_runs WHERE id=? AND org_id=?",
+                (crawl_id, org_id),
+            ).fetchone()
+        return self._decode_crawl_run(row)
+
+    def list_crawls(self, org_id: str = "development", limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 101))
+        bounded_offset = max(0, int(offset))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, org_id, start_url, max_pages, depth, url_pattern, status, pages_crawled, truncated, created_at, completed_at FROM crawl_runs WHERE org_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (org_id, bounded_limit, bounded_offset),
+            ).fetchall()
+        return [self._decode_crawl_run(row) for row in rows if row is not None]
+
+    def list_crawl_pages(self, crawl_id: str, org_id: str = "development", limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 100))
+        bounded_offset = max(0, int(offset))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, crawl_id, org_id, url, status, extracted, depth, error, content_hash, content_type, title, parse_warnings_json FROM crawl_pages WHERE crawl_id=? AND org_id=? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (crawl_id, org_id, bounded_limit, bounded_offset),
+            ).fetchall()
+        return [self._decode_crawl_page(row) for row in rows]
 
     @staticmethod
     def content_hash(content: str) -> str:
@@ -322,6 +437,16 @@ class MemoryStore:
         except (KeyError, TypeError, ValueError):
             return None
         return latest if 0 <= age <= max(0, int(max_age_seconds)) else None
+
+    def delete_crawls(self, org_id: str, crawl_id: str | None = None) -> int:
+        with self._connect() as connection:
+            if crawl_id is None:
+                deleted = connection.execute("DELETE FROM crawl_runs WHERE org_id=?", (org_id,)).rowcount
+                connection.execute("DELETE FROM crawl_pages WHERE org_id=?", (org_id,))
+                return int(deleted)
+            deleted = connection.execute("DELETE FROM crawl_runs WHERE id=? AND org_id=?", (crawl_id, org_id)).rowcount
+            connection.execute("DELETE FROM crawl_pages WHERE crawl_id=? AND org_id=?", (crawl_id, org_id))
+            return int(deleted)
 
     def delete_snapshots(self, org_id: str, target: str | None = None) -> int:
         query = "DELETE FROM snapshots WHERE org_id=?"
@@ -699,4 +824,6 @@ class MemoryStore:
             jobs = [dict(row) for row in connection.execute("SELECT * FROM scheduler_jobs" + clause, params)]
             deliveries = [dict(row) for row in connection.execute("SELECT job_id, org_id, monitor_id, url, status, attempts, max_attempts, last_status_code, last_error, created_at, updated_at, delivered_at FROM webhook_deliveries" + clause, params)]
             attempts = [dict(row) for row in connection.execute("SELECT id, job_id, org_id, attempt, delivered, status_code, error, attempted_at FROM webhook_delivery_attempts" + clause, params)]
-        return redact_mapping({"monitors": monitors, "snapshots": snapshots, "jobs": jobs, "webhook_deliveries": deliveries, "webhook_attempts": attempts})
+            crawls = [dict(row) for row in connection.execute("SELECT id, org_id, start_url, max_pages, depth, url_pattern, status, pages_crawled, truncated, created_at, completed_at FROM crawl_runs" + clause, params)]
+            crawl_pages = [dict(row) for row in connection.execute("SELECT id, crawl_id, org_id, url, status, extracted, depth, error, content_hash, content_type, title FROM crawl_pages" + clause, params)]
+        return redact_mapping({"monitors": monitors, "snapshots": snapshots, "jobs": jobs, "webhook_deliveries": deliveries, "webhook_attempts": attempts, "crawls": crawls, "crawl_pages": crawl_pages})

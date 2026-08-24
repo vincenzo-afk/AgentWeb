@@ -10,7 +10,9 @@ Base URL: `https://api.agentweb.dev/v1`
 | GET | `/observe/{id}` | Get monitor status/history |
 | DELETE | `/observe/{id}` | Cancel a monitor; supports idempotency |
 | POST | `/search` | Low-level search |
-| POST | `/crawl` | Low-level crawl |
+| POST | `/crawl` | Low-level bounded crawl; supports idempotency |
+| GET | `/crawl` | List tenant-scoped crawl runs with cursor pagination |
+| GET | `/crawl/{crawl_id}` | Retrieve one crawl run and its page metadata |
 | POST | `/browser/sessions` | Open a browser session; may use an opaque encrypted-credential reference |
 | POST | `/extract` | Structured extraction from a page or document |
 | GET | `/memory/{target}` | Retrieve stored snapshots for a target |
@@ -24,7 +26,7 @@ Base URL: `https://api.agentweb.dev/v1`
 | DELETE | `/admin/browser-credentials/{id}` | Revoke an encrypted browser credential with idempotency support |
 | GET | `/admin/audit` | List immutable security events with cursor pagination and optional action/actor/target/time-range filters |
 | GET | `/admin/usage` | View organization usage and estimated billing |
-| DELETE | `/admin/data` | Delete organization-owned snapshots and execution traces; supports idempotency |
+| DELETE | `/admin/data` | Delete organization-owned snapshots, crawl history, or execution traces; supports idempotency |
 | GET | `/admin/metrics` | Read organization-scoped operational metrics |
 
 List endpoints use the opaque `cursor` and bounded `limit` query parameters described in [pagination.md](pagination.md). Full request/response schemas are in [reference/](reference/search.md).

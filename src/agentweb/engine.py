@@ -55,7 +55,7 @@ class AgentWebEngine:
         self.trust_engine = TrustEngine(
             blocked_domains={domain for domain in os.getenv("AGENTWEB_BLOCKED_DOMAINS", "").split(",") if domain}
         )
-        self.crawler = Crawler(self.trust_engine)
+        self.crawler = Crawler(self.trust_engine, memory=self.memory, coordinator=queue_coordinator)
         self.browser = BrowserEngine(self.trust_engine)
         self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook, coordinator=queue_coordinator)
 
