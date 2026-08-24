@@ -44,15 +44,29 @@ def _gc_main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="agentweb gc")
     parser.add_argument("--data", default="agentweb.sqlite3", help="SQLite database path.")
     parser.add_argument("--snapshot-days", type=int, default=90, help="Snapshot retention window.")
+    parser.add_argument("--crawl-days", type=int, default=90, help="Crawl-history retention window.")
     parser.add_argument("--trace-days", type=int, default=30, help="Trace retention window.")
     parser.add_argument("--metric-days", type=int, default=30, help="Metric retention window.")
     parser.add_argument("--audit-days", type=int, default=730, help="Audit-event retention window (default: 730 days).")
     parser.add_argument("--org", default=None, help="Limit cleanup to one organization.")
+    parser.add_argument("--schedule", action="store_true", help="Enqueue retention cleanup for the supervised worker.")
+    parser.add_argument("--run-at", type=float, default=None, help="Unix timestamp at which a scheduled cleanup becomes due.")
     args = parser.parse_args(argv[1:])
     memory = MemoryStore(args.data)
+    if args.schedule:
+        provider = build_provider()
+        coordinator = open_distributed_queue(DatabaseConfig.from_environment(provider))
+        engine = AgentWebEngine(memory, secret_provider=provider, queue_coordinator=coordinator)
+        try:
+            job_id = engine.schedule_retention(args.org, snapshot_retention_days=args.snapshot_days, crawl_retention_days=args.crawl_days, trace_retention_days=args.trace_days, metric_retention_days=args.metric_days, audit_retention_days=args.audit_days, run_at=args.run_at)
+            print(json.dumps({"job_id": job_id, "org_id": args.org, "run_at": args.run_at, "status": "scheduled"}, indent=2))
+        finally:
+            if coordinator is not None and hasattr(coordinator, "close"):
+                coordinator.close()
+        return
     engine = AgentWebEngine(memory)
     audit_store = KeyStore(args.data)
-    print(json.dumps(purge_retention(memory, engine.traces, snapshot_retention_days=args.snapshot_days, trace_retention_days=args.trace_days, metric_retention_days=args.metric_days, audit_retention_days=args.audit_days, org_id=args.org, metrics=engine.metrics, audit_store=audit_store), indent=2))
+    print(json.dumps(purge_retention(memory, engine.traces, snapshot_retention_days=args.snapshot_days, crawl_retention_days=args.crawl_days, trace_retention_days=args.trace_days, metric_retention_days=args.metric_days, audit_retention_days=args.audit_days, org_id=args.org, metrics=engine.metrics, audit_store=audit_store), indent=2))
 
 
 def main() -> None:

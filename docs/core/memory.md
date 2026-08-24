@@ -15,6 +15,6 @@ Internet page -> snapshot -> hash -> compare -> reuse -> refresh changed section
 
 ## Retention
 
-Snapshot retention follows the policy in [operations/data-retention.md](../operations/data-retention.md); historical replay for audits depends on retention window length.
+Snapshot and crawl-history retention follow the policy in [operations/data-retention.md](../operations/data-retention.md). `agentweb gc` can purge expired records immediately, while `agentweb gc --schedule` stores one bounded `retention_gc` job for the supervised worker. The job can target one organization or all local organizations, uses the same lease/retry/dead-letter boundary as other scheduler jobs, and is coordinated through PostgreSQL when distributed queue mode is explicitly enabled; historical replay for audits depends on the retained window.
 
 See [api/reference/memory.md](../api/reference/memory.md) for direct access.

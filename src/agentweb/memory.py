@@ -89,6 +89,7 @@ class MemoryStore:
                     last_error TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
+                    payload_json TEXT,
                     UNIQUE(job_type, org_id, monitor_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_org_due
@@ -179,6 +180,9 @@ class MemoryStore:
                     ON crawl_pages(org_id, crawl_id, id);
                 """
             )
+            job_columns = {row[1] for row in connection.execute("PRAGMA table_info(scheduler_jobs)")}
+            if job_columns and "payload_json" not in job_columns:
+                connection.execute("ALTER TABLE scheduler_jobs ADD COLUMN payload_json TEXT")
             snapshot_columns = {row[1] for row in connection.execute("PRAGMA table_info(snapshots)")}
             if snapshot_columns and "structured_data_json" not in snapshot_columns:
                 connection.execute("ALTER TABLE snapshots ADD COLUMN structured_data_json TEXT")
@@ -468,6 +472,26 @@ class MemoryStore:
         with self._connect() as connection:
             return int(connection.execute(query, tuple(params)).rowcount)
 
+    def purge_expired_crawls(self, retention_seconds: int = 90 * 86_400, now: float | None = None, org_id: str | None = None) -> int:
+        if retention_seconds < 0:
+            raise ValueError("crawl retention cannot be negative")
+        current = time.time() if now is None else now
+        cutoff = datetime.fromtimestamp(current - int(retention_seconds), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        clauses = ["created_at < ?"]
+        params: list[Any] = [cutoff]
+        if org_id is not None:
+            clauses.append("org_id=?")
+            params.append(org_id)
+        with self._connect() as connection:
+            rows = connection.execute(f"SELECT id FROM crawl_runs WHERE {' AND '.join(clauses)}", tuple(params)).fetchall()
+            if not rows:
+                return 0
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            connection.execute(f"DELETE FROM crawl_pages WHERE crawl_id IN ({placeholders})", tuple(ids))
+            connection.execute(f"DELETE FROM crawl_runs WHERE id IN ({placeholders})", tuple(ids))
+            return len(ids)
+
     def diff(self, target: str, from_hash: str, to_hash: str, org_id: str = "development") -> dict[str, Any]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -568,6 +592,50 @@ class MemoryStore:
                     "AND status IN ('pending', 'leased')",
                     (time.time(), monitor.id, monitor.org_id),
                 )
+
+    def enqueue_retention_job(
+        self,
+        target_org: str | None = None,
+        *,
+        snapshot_retention_days: int = 90,
+        crawl_retention_days: int = 90,
+        trace_retention_days: int = 30,
+        metric_retention_days: int = 30,
+        audit_retention_days: int = 730,
+        run_at: float | None = None,
+        job_id: str | None = None,
+    ) -> str:
+        values = {
+            "org_id": target_org,
+            "snapshot_retention_days": int(snapshot_retention_days),
+            "crawl_retention_days": int(crawl_retention_days),
+            "trace_retention_days": int(trace_retention_days),
+            "metric_retention_days": int(metric_retention_days),
+            "audit_retention_days": int(audit_retention_days),
+        }
+        if any(value < 0 for key, value in values.items() if key.endswith("_days")):
+            raise ValueError("retention days cannot be negative")
+        queue_org = target_org or "system"
+        current = time.time() if run_at is None else float(run_at)
+        payload = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id FROM scheduler_jobs WHERE job_type='retention_gc' AND org_id=? AND monitor_id='retention'",
+                (queue_org,),
+            ).fetchone()
+            if existing:
+                state_id = existing["id"]
+                connection.execute(
+                    "UPDATE scheduler_jobs SET status='pending', priority=1, run_at=?, lease_until=NULL, lease_token=NULL, attempts=0, max_attempts=3, last_error=NULL, payload_json=?, updated_at=? WHERE id=? AND org_id=?",
+                    (current, payload, current, state_id, queue_org),
+                )
+                return state_id
+            state_id = job_id or ("job_" + uuid.uuid4().hex[:16])
+            connection.execute(
+                "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, lease_until, attempts, max_attempts, last_error, created_at, updated_at, payload_json) VALUES(?, ?, 'retention_gc', 'retention', 1, 'pending', ?, NULL, 0, 3, NULL, ?, ?, ?)",
+                (state_id, queue_org, current, current, current, payload),
+            )
+        return state_id
 
     def enqueue_webhook_delivery(
         self,

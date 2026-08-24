@@ -399,6 +399,68 @@ class AgentWebTests(unittest.TestCase):
         self.assertGreaterEqual(self.store.queue_summary("org-a")["pending"], 1)
         self.assertEqual(self.store.queue_summary("org-b").get("pending", 0), 0)
 
+    def test_retention_purges_expired_crawl_history_by_organization(self):
+        now = 1_800_000_000.0
+        old_id = "crawl_old"
+        fresh_id = "crawl_fresh"
+        other_id = "crawl_other"
+        self.store.create_crawl(old_id, "org-a", self.url, 1, 0, None)
+        self.store.create_crawl(fresh_id, "org-a", self.url, 1, 0, None)
+        self.store.create_crawl(other_id, "org-b", self.url, 1, 0, None)
+        page = {"url": self.url, "status": 200, "extracted": True, "depth": 0, "content_hash": "hash-old", "content_type": "text/html", "title": "Fixture"}
+        self.store.save_crawl_page(old_id, "org-a", page)
+        from datetime import datetime, timezone
+        old_at = datetime.fromtimestamp(now - 2 * 86_400, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        fresh_at = datetime.fromtimestamp(now - 3_600, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        with sqlite3.connect(self.store.path) as connection:
+            connection.execute("UPDATE crawl_runs SET created_at=? WHERE id=?", (old_at, old_id))
+            connection.execute("UPDATE crawl_runs SET created_at=? WHERE id=?", (fresh_at, fresh_id))
+            connection.execute("UPDATE crawl_runs SET created_at=? WHERE id=?", (old_at, other_id))
+        result = purge_retention(self.store, self.engine.traces, crawl_retention_days=1, now=now, org_id="org-a")
+        self.assertEqual(result["deleted_crawls"], 1)
+        self.assertIsNone(self.store.get_crawl(old_id, "org-a"))
+        self.assertEqual(self.store.list_crawl_pages(old_id, "org-a"), [])
+        self.assertIsNotNone(self.store.get_crawl(fresh_id, "org-a"))
+        self.assertIsNotNone(self.store.get_crawl(other_id, "org-b"))
+
+    def test_scheduler_executes_retention_job_and_cancels_after_success(self):
+        now = 1_800_000_000.0
+        crawl_id = "crawl_scheduled_old"
+        self.store.create_crawl(crawl_id, "org-a", self.url, 1, 0, None)
+        with sqlite3.connect(self.store.path) as connection:
+            connection.execute("UPDATE crawl_runs SET created_at=? WHERE id=?", ("2026-01-01T00:00:00Z", crawl_id))
+        job_id = self.engine.schedule_retention("org-a", crawl_retention_days=1, run_at=now)
+        self.assertEqual(self.store.get_job(job_id)["job_type"], "retention_gc")
+        result = self.engine.scheduler.run_once(now=now)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["result"]["deleted_crawls"], 1)
+        self.assertEqual(self.store.get_job(job_id)["status"], "cancelled")
+        self.assertIsNone(self.store.get_crawl(crawl_id, "org-a"))
+
+    def test_retention_job_payload_is_persisted_and_exported(self):
+        job_id = self.store.enqueue_retention_job("org-a", snapshot_retention_days=10, crawl_retention_days=11, run_at=1_800_000_000.0)
+        stored = self.store.get_job(job_id)
+        self.assertEqual(json.loads(stored["payload_json"])["crawl_retention_days"], 11)
+        output = Path(self.temp_dir.name) / "retention-export"
+        manifest = export_sqlite_relational(self.store.path, output)
+        self.assertTrue(any(item["table"] == "scheduler_jobs" for item in manifest["tables"]))
+        exported = [json.loads(line) for line in (output / "scheduler_jobs.jsonl").read_text(encoding="utf-8").splitlines()]
+        row = next(item for item in exported if item["id"] == job_id)
+        self.assertEqual(json.loads(row["payload_json"])["snapshot_retention_days"], 10)
+
+    def test_scheduler_retries_retention_job_when_runner_fails(self):
+        job_id = self.store.enqueue_retention_job("org-a", run_at=1_800_000_000.0)
+        self.engine.scheduler.retention_runner = lambda _payload: (_ for _ in ()).throw(RuntimeError("temporary retention failure"))
+        result = self.engine.scheduler.run_once(now=1_800_000_000.0)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(self.store.get_job(job_id)["status"], "pending")
+        self.assertIn("temporary retention failure", self.store.get_job(job_id)["last_error"])
+
+    def test_postgres_queue_schema_contains_retention_payload_contract(self):
+        self.assertIn("payload_json JSONB", POSTGRES_SCHEMA)
+        constants = " ".join(str(item) for item in __import__("agentweb.rdbms", fromlist=["PostgresDistributedQueue"]).PostgresDistributedQueue.enqueue_retention_job.__code__.co_consts)
+        self.assertIn("retention_gc", constants)
+
     def test_ranking_consumes_recency_and_extraction_confidence(self):
         from agentweb.models import Source
         newer = Source("new", "https://new.example", "Fresh", "current", trust_score=0.6, published_at="2099-01-01T00:00:00Z", content_type="text/html", extraction_confidence=1.0)

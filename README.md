@@ -36,7 +36,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Trust and ranking | Unsafe target classes are blocked by default; accepted sources are ranked using trust, task relevance, and corroboration signals. |
 | Monitoring | `GET /observe` lists organization monitors with cursor pagination; `POST /observe` creates an organization-scoped SQLite monitor; `GET /observe/{id}` checks its URL, records explicit `no_change`/`change_detected`/`check_failed` events, and exposes queued webhook delivery status, attempts, retries, and dead-letter failures. |
 | Crawling | `POST /crawl` performs bounded same-origin breadth-first traversal with robots and trust checks, persists tenant-scoped run/page metadata and immutable page snapshots, and returns a durable `crawl_id`; `GET /crawl` and `GET /crawl/{id}` expose history without cross-tenant disclosure. |
-| Memory reuse | SQLite stores immutable content versions, hashes, monitor state, crawl history, and explicit diffs, all scoped by organization. |
+| Memory reuse | SQLite stores immutable content versions, hashes, monitor state, crawl history, and explicit diffs, all scoped by organization; bounded retention cleanup purges expired snapshots and crawl runs, either immediately or through a queued `retention_gc` job. |
 | Authentication and limits | Bearer keys support endpoint scopes; persistent keys are PBKDF2-hashed, organization-scoped, revocable, briefly cached, and protected by per-identity rate limits. |
 | Observability | Each solve, browser, and monitor operation records secret-safe organization-scoped spans retrievable through `/report/{execution_id}`. |
 | Browser execution | `POST /browser/sessions` renders JavaScript pages through fresh contexts and a bounded lazily spawned browser-worker pool; worker failures remain typed and retryable. Authorized operators can provision encrypted, origin-bound storage state and reuse it through opaque `session_state_id` references without exposing tokens. |
@@ -128,7 +128,7 @@ Configuration is provided through environment variables and CLI flags. No secret
 | `DATABASE_URL` | SQLite in development | `sqlite:///...` for local use; staging/production require `postgresql://...` and the `postgres` extra. |
 | `--host` | `127.0.0.1` | Server bind address. |
 | `--port` | `8000` | Server port. |
-| `--data` | `agentweb.sqlite3` | SQLite database path for monitor and snapshot state. |
+| `--data` | `agentweb.sqlite3` | SQLite database path for monitor, snapshot, crawl, and retention-job state. |
 
 For a network-facing deployment, set `AGENTWEB_ENV=staging` or `production`, source platform secrets through `AGENTWEB_SECRET_PROVIDER=command` or an injected deployment provider, set a PostgreSQL `DATABASE_URL`, install `agentweb[production]`, and put the API behind a TLS-terminating reverse proxy. The included server remains a compact application boundary rather than a complete production edge proxy.
 
@@ -225,9 +225,9 @@ The longer-term architecture adds richer planning, routing, graph reasoning, and
 
 ## Data and persistence
 
-The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains organizations, hashed API keys, immutable content snapshots, organization-scoped monitor records, durable crawl runs and page metadata, encrypted browser credentials and origin-bound session states, execution traces, audit events, and durable scheduler jobs with leases and retry state. Sensitive browser state is never returned by listing or browser responses. The database file is ignored by Git through the repository's `.gitignore`.
+The default `agentweb.sqlite3` file is created in the working directory on first server start. It contains organizations, hashed API keys, immutable content snapshots, organization-scoped monitor records, durable crawl runs and page metadata, encrypted browser credentials and origin-bound session states, execution traces, audit events, and durable scheduler jobs with leases, retry state, and bounded `retention_gc` payloads. Sensitive browser state is never returned by listing or browser responses. The database file is ignored by Git through the repository's `.gitignore`.
 
-Monitoring can be checked synchronously through `GET /observe/{id}` or asynchronously by running `agentweb --worker`. The worker claims due jobs, prioritizes minutely monitors, reschedules successful checks by frequency, retries worker failures, and records exhausted jobs as `dead_letter`.
+Monitoring can be checked synchronously through `GET /observe/{id}` or asynchronously by running `agentweb --worker`. The worker claims due jobs, prioritizes minutely monitors, executes scheduled retention cleanup, reschedules successful checks by frequency, retries worker failures, and records exhausted jobs as `dead_letter`. Use `agentweb gc --schedule` to enqueue cleanup without running it in the API process.
 
 ## Testing
 
@@ -255,7 +255,8 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 ## Current limitations
 
 This repository does not yet implement CAPTCHA/MFA automation, LLM-based synthesis, graph storage, or a full relational runtime cutover.
- External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, and transaction-scoped import are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter. Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
+  External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, transaction-scoped import, and coordinator-aware retention scheduling are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter.
+ Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
  Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
 These limitations are explicit so the repository's runnable behavior remains distinct from the broader product vision and roadmap.

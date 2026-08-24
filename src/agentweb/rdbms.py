@@ -98,9 +98,11 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
     last_error TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    payload_json JSONB NULL,
     UNIQUE(job_type, org_id, monitor_id)
 );
 ALTER TABLE scheduler_jobs ADD COLUMN IF NOT EXISTS lease_token VARCHAR(100) NULL;
+ALTER TABLE scheduler_jobs ADD COLUMN IF NOT EXISTS payload_json JSONB NULL;
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     job_id VARCHAR(100) PRIMARY KEY REFERENCES scheduler_jobs(id),
     org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
@@ -499,6 +501,16 @@ class PostgresDistributedQueue(PostgresRelationalStore):
                 cursor.execute(
                     "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, attempts, max_attempts, created_at, updated_at) VALUES(%s, %s, 'monitor_check', %s, %s, 'pending', %s, 0, 5, %s, %s) ON CONFLICT (id) DO NOTHING",
                     (job_id, org_id, monitor_id, priority, current, current, current),
+                )
+
+    def enqueue_retention_job(self, job_id: str, queue_org: str, payload: dict[str, Any], run_at: float | None = None) -> None:
+        current = self._timestamp(run_at)
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO organizations(id, name) VALUES(%s, %s) ON CONFLICT (id) DO NOTHING", (queue_org, queue_org))
+                cursor.execute(
+                    "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, attempts, max_attempts, created_at, updated_at, payload_json) VALUES(%s, %s, 'retention_gc', 'retention', 1, 'pending', %s, 0, 3, %s, %s, %s::jsonb) ON CONFLICT (job_type, org_id, monitor_id) DO UPDATE SET status='pending', run_at=EXCLUDED.run_at, attempts=0, lease_until=NULL, lease_token=NULL, last_error=NULL, payload_json=EXCLUDED.payload_json, updated_at=EXCLUDED.updated_at",
+                    (job_id, queue_org, current, current, current, json.dumps(payload, separators=(",", ":"), ensure_ascii=False)),
                 )
 
     def enqueue_webhook_delivery(self, job_id: str, org_id: str, monitor_id: str, url: str, payload: dict[str, Any], max_attempts: int = 5, run_at: float | None = None) -> None:

@@ -9,12 +9,14 @@ import uuid
 from urllib.parse import urlparse
 
 from .alerting import DeliveryResult, send_webhook
+from .auth import KeyStore
 from .browser import BrowserEngine
 from .browser_sessions import BrowserSessionStore
 from .crawler import Crawler
 from .credentials import BrowserCredentialStore
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .memory import MemoryStore
+from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
@@ -54,12 +56,13 @@ class AgentWebEngine:
         self.session_states = BrowserSessionStore(self.memory.path, self.secret_provider)
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
         self.traces = TraceStore(self.memory.path)
+        self.audit_store = KeyStore(self.memory.path)
         self.trust_engine = TrustEngine(
             blocked_domains={domain for domain in os.getenv("AGENTWEB_BLOCKED_DOMAINS", "").split(",") if domain}
         )
         self.crawler = Crawler(self.trust_engine, memory=self.memory, coordinator=queue_coordinator)
         self.browser = BrowserEngine(self.trust_engine)
-        self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook, coordinator=queue_coordinator)
+        self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook, retention_runner=self.run_retention, coordinator=queue_coordinator)
 
     @staticmethod
     def _trust_score(url: str, title: str = "") -> float:
@@ -332,6 +335,49 @@ class AgentWebEngine:
             conflicts=synthesis_result.conflicts or [],
             structured_output=synthesis_result.structured_output or {},
         )
+
+    def run_retention(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise ValueError("retention payload must be an object")
+        target_org = payload.get("org_id")
+        if target_org is not None:
+            target_org = str(target_org).strip() or None
+        options = {
+            "snapshot_retention_days": int(payload.get("snapshot_retention_days", 90)),
+            "crawl_retention_days": int(payload.get("crawl_retention_days", 90)),
+            "trace_retention_days": int(payload.get("trace_retention_days", 30)),
+            "metric_retention_days": int(payload.get("metric_retention_days", 30)),
+            "audit_retention_days": int(payload.get("audit_retention_days", 730)),
+        }
+        if any(value < 0 for value in options.values()):
+            raise ValueError("retention days cannot be negative")
+        return purge_retention(self.memory, self.traces, **options, org_id=target_org, metrics=self.metrics, audit_store=self.audit_store)
+
+    def schedule_retention(
+        self,
+        target_org: str | None = None,
+        *,
+        snapshot_retention_days: int = 90,
+        crawl_retention_days: int = 90,
+        trace_retention_days: int = 30,
+        metric_retention_days: int = 30,
+        audit_retention_days: int = 730,
+        run_at: float | None = None,
+    ) -> str:
+        options = {
+            "snapshot_retention_days": int(snapshot_retention_days),
+            "crawl_retention_days": int(crawl_retention_days),
+            "trace_retention_days": int(trace_retention_days),
+            "metric_retention_days": int(metric_retention_days),
+            "audit_retention_days": int(audit_retention_days),
+        }
+        if any(value < 0 for value in options.values()):
+            raise ValueError("retention days cannot be negative")
+        payload = {"org_id": target_org, **options}
+        job_id = self.memory.enqueue_retention_job(target_org, **options, run_at=run_at)
+        if self.queue_coordinator is not None:
+            self.queue_coordinator.enqueue_retention_job(job_id, target_org or "system", payload, run_at=run_at)
+        return job_id
 
     def create_monitor(self, task: str, frequency: str = "hourly", webhook_url: str | None = None, org_id: str = "development", change_policy: dict | None = None) -> Monitor:
         task = task.strip()
