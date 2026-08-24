@@ -207,6 +207,19 @@ class GraphApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertNotEqual(first["edges"][0]["id"], second["edges"][0]["id"])
 
+    def test_graph_query_paginates_isolated_entities(self) -> None:
+        for name in ("Orphan A", "Orphan B", "Orphan C"):
+            status, _, _ = self.request("POST", "/v1/graph/entities", {"type": "Orphan", "name": name})
+            self.assertEqual(status, 201)
+        status, first, _ = self.request("GET", "/v1/graph/query?entity_type=Orphan&limit=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(first["nodes"]), 1)
+        self.assertTrue(first["has_more"])
+        status, second, _ = self.request("GET", "/v1/graph/query?entity_type=Orphan&limit=1&cursor=" + first["next_cursor"])
+        self.assertEqual(status, 200)
+        self.assertEqual(len(second["nodes"]), 1)
+        self.assertNotEqual(first["nodes"][0]["id"], second["nodes"][0]["id"])
+
     def test_graph_depth_is_bounded(self) -> None:
         status, payload, _ = self.request("GET", "/v1/graph/query?depth=4")
         self.assertEqual(status, 400)

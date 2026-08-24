@@ -423,10 +423,18 @@ class GraphStore:
             elif anchor_id:
                 entity_clauses.append("id=?")
                 entity_params.append(anchor_id)
-            entity_rows = connection.execute(
-                "SELECT * FROM graph_entities WHERE " + " AND ".join(entity_clauses) + " ORDER BY name COLLATE NOCASE, id LIMIT ? OFFSET ?",
-                (*entity_params, bounded_limit, bounded_cursor),
-            ).fetchall()
+            if entity_ids:
+                entity_rows = connection.execute(
+                    "SELECT * FROM graph_entities WHERE " + " AND ".join(entity_clauses) + " ORDER BY name COLLATE NOCASE, id LIMIT ?",
+                    (*entity_params, bounded_limit),
+                ).fetchall()
+            else:
+                entity_rows = connection.execute(
+                    "SELECT * FROM graph_entities WHERE " + " AND ".join(entity_clauses) + " ORDER BY name COLLATE NOCASE, id LIMIT ? OFFSET ?",
+                    (*entity_params, bounded_limit + 1, bounded_cursor),
+                ).fetchall()
+                has_more = len(entity_rows) > bounded_limit
+                entity_rows = entity_rows[:bounded_limit]
         edges = []
         for row in edge_rows:
             relation_item = self._relation(row)
