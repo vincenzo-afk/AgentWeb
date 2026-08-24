@@ -10,6 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from agentweb.api import create_server
+from agentweb.engine import AgentWebEngine
 from agentweb.graph import GraphStore
 from agentweb.memory import MemoryStore
 from agentweb.models import Monitor
@@ -57,6 +58,19 @@ class GraphStoreTests(unittest.TestCase):
         result = self.store.query(related_to="Ada", org_id="org_a", depth=2)
         self.assertEqual({edge.relation for edge in result.edges}, {"works_on", "contains"})
         self.assertEqual({node.name for node in result.nodes}, {"Ada", "Graph", "AgentWeb"})
+
+    def test_solve_can_use_graph_context_as_grounded_sources(self) -> None:
+        ada = self.store.upsert_entity({"type": "Person", "name": "Ada", "attributes": {"role": "founder"}}, "development")
+        project = self.store.upsert_entity({"type": "Project", "name": "Graph"}, "development")
+        self.store.upsert_relation(ada.id, project.id, "works_on", 0.9, "development", "src_profile")
+        response = AgentWebEngine(MemoryStore(self.store.path)).solve(
+            "Which project does Ada work on?",
+            org_id="development",
+            inputs={"graph_query": {"related_to": "Ada", "depth": 1}},
+        )
+        self.assertTrue(any(source.url.startswith("graph://") for source in response.sources))
+        self.assertTrue(any(action.get("tool") == "graph" for action in response.actions))
+        self.assertIn("graph_context", response.selection_logic["source_strategy"])
 
 
 class WorkflowStoreTests(unittest.TestCase):
@@ -147,6 +161,19 @@ class GraphApiTests(unittest.TestCase):
         status, payload, _ = self.request("GET", "/v1/graph/query?depth=4")
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["type"], "invalid_request")
+
+    def test_solve_accepts_top_level_graph_query(self) -> None:
+        status, entity, _ = self.request("POST", "/v1/graph/entities", {"type": "Company", "name": "Acme"})
+        self.assertEqual(status, 201)
+        status, response, _ = self.request(
+            "POST",
+            "/v1/solve",
+            {"task": "Summarize Acme", "graph_query": {"related_to": "Acme", "depth": 1}},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(any(action.get("tool") == "graph" for action in response["actions"]))
+        self.assertTrue(any(source["url"].startswith("graph://") for source in response["sources"]))
+        self.assertEqual(entity["name"], "Acme")
 
     def test_workflow_routes_are_tenant_scoped_and_validated(self) -> None:
         status, payload, _ = self.request("GET", "/v1/workflows")

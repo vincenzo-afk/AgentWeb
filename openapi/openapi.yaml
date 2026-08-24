@@ -1447,6 +1447,24 @@ components:
             session_state_id:
               type: string
               description: Opaque tenant- and origin-bound encrypted browser session-state ID.
+            graph_query:
+              type: object
+              description: Optional bounded graph context used as grounded synthesis input.
+              properties:
+                entity_type: { type: string, maxLength: 200 }
+                related_to: { type: string, maxLength: 200 }
+                relation: { type: string, maxLength: 200 }
+                depth: { type: integer, minimum: 1, maximum: 3, default: 1 }
+                limit: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        graph_query:
+          type: object
+          description: Convenience top-level form of inputs.graph_query.
+          properties:
+            entity_type: { type: string, maxLength: 200 }
+            related_to: { type: string, maxLength: 200 }
+            relation: { type: string, maxLength: 200 }
+            depth: { type: integer, minimum: 1, maximum: 3, default: 1 }
+            limit: { type: integer, minimum: 1, maximum: 100, default: 100 }
         webhook_url:
           type: string
         idempotency_key:

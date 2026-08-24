@@ -28,7 +28,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 
 | Capability | Implementation in this repository |
 | --- | --- |
-| Grounded research | `POST /solve` accepts a task and returns an answer, sources, citations, execution ID, timestamp, evidence score, explicit conflicts, and selected output format. Weak evidence is marked `insufficient_evidence` instead of being fabricated. |
+| Grounded research | `POST /solve` accepts a task and returns an answer, sources, citations, execution ID, timestamp, evidence score, explicit conflicts, and selected output format. Weak evidence is marked `insufficient_evidence` instead of being fabricated. An optional `graph_query` supplies bounded graph context as additional grounded sources. |
 | Retrieval modes | `flash`, `focus`, `dive`, and `monitor` are accepted; they control the number of returned sources. |
 | Search | `POST /search` uses a pluggable provider boundary with free DuckDuckGo fallback, optional HTTP JSON provider configuration, freshness filters, normalized published dates when supplied, and graceful provider failure. |
 | Extraction | `POST /extract` parses an HTTP(S) page and returns title, description, normalized text, links, warnings, overall confidence, field-level confidence, and optional schema-guided fields with confidence scores. |
@@ -159,7 +159,7 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `GET` | `/health` | Liveness response. |
 | `POST` | `/plan` | Create a tenant-scoped, inspectable plan without executing it. Required field: `task`; optional fields: `mode`, `skill`, and `inputs`. Plans expire from the bounded in-memory store after 15 minutes. Requires `solve:execute`. |
 | `POST` | `/execute` | Execute a previously approved `plan_id` for the same organization; supports `Idempotency-Key` and optional `output_format`. Requires `solve:execute`. |
-| `POST` | `/solve` | Run a grounded research task. Required field: `task`; optional fields: `mode`, `skill`, `inputs`, `webhook_url`, `idempotency_key`, and `output_format` (`text`, `comparison`, `timeline`, or `json`). |
+| `POST` | `/solve` | Run a grounded research task. Required field: `task`; optional fields: `mode`, `skill`, `inputs`, `graph_query`, `webhook_url`, `idempotency_key`, and `output_format` (`text`, `comparison`, `timeline`, or `json`). `graph_query` supports bounded graph-assisted synthesis. |
 | `GET` | `/observe` | List organization monitors using optional `cursor` and bounded `limit` query parameters. |
 | `POST` | `/observe` | Create a monitor. Required field: `task`; optional fields: `frequency` and `webhook_url`; supports `Idempotency-Key`. |
 | `POST` | `/crawl` | Run a bounded same-origin crawl. Required field: `start_url`; optional fields: `max_pages`, `depth`, `url_pattern`, and `idempotency_key`. |

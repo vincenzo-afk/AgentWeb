@@ -580,13 +580,20 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     payload.get("output_format"),
                 )
             elif path == "/solve":
+                solve_inputs = payload.get("inputs")
+                if "graph_query" in payload:
+                    if solve_inputs is None:
+                        solve_inputs = {}
+                    if not isinstance(solve_inputs, dict):
+                        raise InvalidRequestError("inputs must be an object when graph_query is provided")
+                    solve_inputs = {**solve_inputs, "graph_query": payload.get("graph_query")}
                 response_payload = self.engine.solve(
                     payload.get("task", ""),
                     payload.get("mode"),
                     principal.org_id,
                     payload.get("output_format"),
                     payload.get("skill"),
-                    payload.get("inputs"),
+                    solve_inputs,
                 ).to_dict()
             elif path == "/observe":
                 monitor = self.engine.create_monitor(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -344,6 +345,69 @@ class AgentWebEngine:
         response["plan_id"] = record.plan.id
         return response
 
+    @staticmethod
+    def _graph_query_inputs(inputs: dict | None) -> dict[str, object] | None:
+        if not isinstance(inputs, dict) or inputs.get("graph_query") is None:
+            return None
+        query = inputs["graph_query"]
+        if not isinstance(query, dict):
+            raise ValueError("inputs.graph_query must be an object")
+        allowed = {"entity_type", "related_to", "relation", "depth", "limit"}
+        unknown = set(query) - allowed
+        if unknown:
+            raise ValueError(f"unsupported graph_query field: {sorted(unknown)[0]}")
+        result: dict[str, object] = {}
+        for field in ("entity_type", "related_to", "relation"):
+            value = query.get(field)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip() or len(value.strip()) > 200:
+                    raise ValueError(f"graph_query.{field} must contain between 1 and 200 characters")
+                result[field] = value.strip()
+        for field, minimum, maximum in (("depth", 1, 3), ("limit", 1, 100)):
+            if field in query:
+                value = query[field]
+                if isinstance(value, bool):
+                    raise ValueError(f"graph_query.{field} must be an integer")
+                try:
+                    value = int(value)
+                except (TypeError, ValueError) as error:
+                    raise ValueError(f"graph_query.{field} must be an integer") from error
+                if value < minimum or value > maximum:
+                    raise ValueError(f"graph_query.{field} must be between {minimum} and {maximum}")
+                result[field] = value
+        return result
+
+    @staticmethod
+    def _graph_sources(graph_result) -> list[Source]:
+        sources: list[Source] = []
+        for node in graph_result.nodes:
+            sources.append(
+                Source(
+                    id="graph_" + node.id,
+                    url="graph://" + node.id,
+                    title=node.name,
+                    snippet=f"{node.type}: {node.name}; attributes={json.dumps(node.attributes, sort_keys=True)}",
+                    trust_score=node.confidence,
+                    cited=True,
+                    content_type="application/vnd.agentweb.graph-node",
+                    structured_data={"type": node.type, "source_ids": node.source_ids, **node.attributes},
+                )
+            )
+        for edge in graph_result.edges:
+            sources.append(
+                Source(
+                    id="graph_" + edge.id,
+                    url="graph://" + edge.id,
+                    title=edge.relation,
+                    snippet=f"{edge.from_id} {edge.relation} {edge.to_id}; observations={edge.observations}",
+                    trust_score=edge.confidence,
+                    cited=True,
+                    content_type="application/vnd.agentweb.graph-relation",
+                    structured_data={"from": edge.from_id, "to": edge.to_id, "relation": edge.relation, "source_ids": edge.source_ids},
+                )
+            )
+        return sources
+
     def solve(
         self,
         task: str,
@@ -382,6 +446,12 @@ class AgentWebEngine:
         )
         source_candidates: list[Source] = []
         actions: list[dict[str, object]] = [{"tool": "router", "operation": "route", "status": "complete", "call_count": len(tool_calls)}]
+        graph_context = self._graph_query_inputs(inputs)
+        if graph_context is not None:
+            graph_result = self.graph.query(org_id=org_id, **graph_context)
+            graph_sources = self._graph_sources(graph_result)
+            source_candidates.extend(graph_sources)
+            actions.append({"tool": "graph", "operation": "query", "status": "complete", "node_count": len(graph_result.nodes), "edge_count": len(graph_result.edges), "depth": int(graph_context.get("depth", 1))})
         reuse_hits = 0
         max_retrievals = 5 if mode == "dive" else 3
         for tool, url, params in retrieval_calls[:max_retrievals]:
@@ -508,7 +578,7 @@ class AgentWebEngine:
             structured_output=synthesis_result.structured_output or {},
             plan=self._plan_summary(plan, tool_calls),
             selection_logic={
-                "source_strategy": "direct_url_reuse_then_fetch" if requested_urls else "provider_search",
+                "source_strategy": "graph_context_then_direct_url_reuse_then_fetch" if graph_context is not None and requested_urls else "graph_context_then_provider_search" if graph_context is not None else "direct_url_reuse_then_fetch" if requested_urls else "provider_search",
                 "memory_reuse_window_seconds": self._reuse_window(task),
                 "ranker": "trust_relevance_corroboration_recency_content_type_extraction_confidence",
                 "source_limit": limit,
