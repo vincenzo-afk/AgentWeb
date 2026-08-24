@@ -18,8 +18,8 @@ Idempotency-Key: workflow-setup-001
 }
 ```
 
-Workflow definitions are tenant-scoped and require `workflow:manage`. Supported events are `monitor.change_detected` and `monitor.no_change`; the default is `monitor.change_detected`. Monitor checks now emit both events to matching workflows, while webhook delivery remains change-only.
- The task template is bounded to 2,000 characters and supports `{event}`, `{monitor_id}`, `{target}`, `{from_hash}`, `{to_hash}`, and `{timestamp}`.
+Workflow definitions are tenant-scoped and require `workflow:manage`. Supported events are `monitor.change_detected`, `monitor.no_change`, and `monitor.check_failed`; the default is `monitor.change_detected`. Monitor checks emit matching events, while webhook delivery remains change-only. Failure workflows receive the bounded `{error}` value in addition to the common monitor fields.
+ The task template is bounded to 2,000 characters and supports `{event}`, `{monitor_id}`, `{target}`, `{from_hash}`, `{to_hash}`, `{timestamp}`, and `{error}`.
 
 ## Pause and resume
 

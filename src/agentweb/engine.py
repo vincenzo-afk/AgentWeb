@@ -846,6 +846,7 @@ class AgentWebEngine:
         if not monitor.target_url:
             monitor.last_event = "check_failed"
             monitor.last_error = "monitor task does not include a direct URL"
+            self.workflows.trigger_for_monitor(monitor.id, monitor.org_id, "monitor.check_failed", {"event": monitor.last_event, "monitor_id": monitor.id, "target": "", "error": monitor.last_error, "timestamp": now})
             self.memory.update_monitor(monitor)
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.task, monitor.last_error)], org_id=monitor.org_id)
             self.memory.record_usage(monitor.org_id, "monitor_checks")
@@ -854,6 +855,7 @@ class AgentWebEngine:
         if not decision.allowed:
             monitor.last_event = "check_failed"
             monitor.last_error = decision.reason
+            self.workflows.trigger_for_monitor(monitor.id, monitor.org_id, "monitor.check_failed", {"event": monitor.last_event, "monitor_id": monitor.id, "target": monitor.target_url, "error": monitor.last_error, "timestamp": now})
             self.memory.update_monitor(monitor)
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
             self.memory.record_usage(monitor.org_id, "monitor_checks")
@@ -862,6 +864,7 @@ class AgentWebEngine:
         if result.error:
             monitor.last_event = "check_failed"
             monitor.last_error = redact_text(result.error)
+            self.workflows.trigger_for_monitor(monitor.id, monitor.org_id, "monitor.check_failed", {"event": monitor.last_event, "monitor_id": monitor.id, "target": monitor.target_url, "error": monitor.last_error, "timestamp": now})
             self.memory.update_monitor(monitor)
             self.traces.save(monitor.id, [self._span("monitor", "check", time.time(), monitor.last_event, monitor.target_url, monitor.last_error)], org_id=monitor.org_id)
             self.memory.record_usage(monitor.org_id, "monitor_checks")

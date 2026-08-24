@@ -14,7 +14,7 @@ from typing import Any
 class WorkflowStore:
     """Persist workflow definitions and run outcomes without storing raw page content."""
 
-    EVENTS = {"monitor.change_detected", "monitor.no_change"}
+    EVENTS = {"monitor.change_detected", "monitor.no_change", "monitor.check_failed"}
     MODES = {"flash", "focus", "dive"}
 
     def __init__(self, path: str | Path, executor: Callable[[str, str, str], Any], enqueue: Callable[[str, str, str, dict[str, Any]], str] | None = None) -> None:
@@ -116,7 +116,7 @@ class WorkflowStore:
         if not task_template or len(task_template) > 2000:
             raise ValueError("task_template must contain between 1 and 2000 characters")
         if event not in self.EVENTS:
-            raise ValueError("event must be monitor.change_detected or monitor.no_change")
+            raise ValueError("event must be monitor.change_detected, monitor.no_change, or monitor.check_failed")
         if mode not in self.MODES:
             raise ValueError("mode must be flash, focus, or dive")
         now = time.time()

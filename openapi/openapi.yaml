@@ -1012,10 +1012,10 @@ components:
           type: string
           minLength: 1
           maxLength: 2000
-          description: Bounded format template. Supported values include {event}, {monitor_id}, {target}, {from_hash}, {to_hash}, and {timestamp}.
+          description: Bounded format template. Supported values include {event}, {monitor_id}, {target}, {from_hash}, {to_hash}, {timestamp}, and {error}.
         event:
           type: string
-          enum: [monitor.change_detected, monitor.no_change]
+          enum: [monitor.change_detected, monitor.no_change, monitor.check_failed]
           default: monitor.change_detected
         mode:
           type: string
