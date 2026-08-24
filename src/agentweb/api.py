@@ -519,7 +519,12 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             response_payload: dict | list | None
             if path == "/solve":
                 response_payload = self.engine.solve(
-                    payload.get("task", ""), payload.get("mode", "focus"), principal.org_id, payload.get("output_format", "text")
+                    payload.get("task", ""),
+                    payload.get("mode"),
+                    principal.org_id,
+                    payload.get("output_format"),
+                    payload.get("skill"),
+                    payload.get("inputs"),
                 ).to_dict()
             elif path == "/observe":
                 monitor = self.engine.create_monitor(

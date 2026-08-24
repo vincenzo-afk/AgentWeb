@@ -22,7 +22,9 @@ from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .synthesis import synthesize
 from .parser import parse
+from .planner import Planner
 from .ranking import rank
+from .router import Router
 from .redaction import redact_text, redact_url
 from .rdbms import PostgresDistributedQueue
 from .scheduler import Scheduler
@@ -55,6 +57,8 @@ class AgentWebEngine:
         self.credentials = BrowserCredentialStore(self.memory.path, self.secret_provider)
         self.session_states = BrowserSessionStore(self.memory.path, self.secret_provider)
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
+        self.planner = Planner()
+        self.router = Router()
         self.traces = TraceStore(self.memory.path)
         self.audit_store = KeyStore(self.memory.path)
         self.trust_engine = TrustEngine(
@@ -256,18 +260,42 @@ class AgentWebEngine:
             data["confidence"] = round(sum(data["field_confidence"].values()) / len(data["field_confidence"]), 2)
         return data
 
-    def solve(self, task: str, mode: str = "focus", org_id: str = "development", output_format: str = "text") -> SolveResponse:
-        task = task.strip()
-        if not task or len(task) > 2000:
-            raise ValueError("task must contain between 1 and 2000 characters")
-        if mode not in {"flash", "focus", "dive"}:
-            raise ValueError("mode must be one of: flash, focus, dive")
+    def solve(
+        self,
+        task: str,
+        mode: str | None = None,
+        org_id: str = "development",
+        output_format: str | None = None,
+        skill: str | None = None,
+        inputs: dict | None = None,
+    ) -> SolveResponse:
+        task = task.strip() if isinstance(task, str) else task
+        plan = self.planner.plan(task, mode, skill, inputs)
+        mode = plan.estimated_mode
+        tool_calls = self.router.route(plan)
+        synthesis_calls = [call for call in tool_calls if call.tool == "synthesize"]
+        synthesis_format = output_format or (synthesis_calls[0].params.get("output_format") if synthesis_calls else None) or "text"
 
         execution_id = self.traces.start()
         spans: list[Span] = []
         started = time.time()
-        requested_urls = list(dict.fromkeys(URL_RE.findall(task)))
-        spans.append(self._span("planner", "classify", started, "complete", "task received", "direct URLs or search"))
+        requested_urls = list(
+            dict.fromkeys(
+                call.params.get("url")
+                for call in tool_calls
+                if call.tool == "extract" and isinstance(call.params.get("url"), str) and call.params.get("url")
+            )
+        )
+        spans.append(
+            self._span(
+                "planner",
+                "plan",
+                started,
+                "complete",
+                "task received",
+                f"intent={plan.intent}; skill={plan.skill or 'none'}; steps={len(plan.steps)}",
+            )
+        )
         source_candidates: list[Source] = []
         reuse_hits = 0
         for url in requested_urls[:5 if mode == "dive" else 3]:
@@ -288,9 +316,12 @@ class AgentWebEngine:
             if source:
                 source_candidates.append(source)
 
-        if not source_candidates:
+        if not source_candidates and any(call.tool == "search" for call in tool_calls):
             search_started = time.time()
-            search_results = search(task, limit=5 if mode in {"focus", "dive"} else 3, provider=self.search_provider)
+            search_call = next(call for call in tool_calls if call.tool == "search")
+            search_limit = search_call.params.get("limit", 5 if mode in {"focus", "dive"} else 3)
+            search_freshness = search_call.params.get("freshness")
+            search_results = search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider)
             spans.append(self._span("search", "search", search_started, "complete", task, f"{len(search_results)} result(s)"))
             for item in search_results:
                 source_candidates.append(
@@ -308,7 +339,7 @@ class AgentWebEngine:
         ranked = rank(source_candidates, task)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
         limit = 1 if mode == "flash" else 3 if mode == "focus" else 5
-        synthesis_result = synthesize([item for item in ranked if item.include][:limit], task, output_format)
+        synthesis_result = synthesize([item for item in ranked if item.include][:limit], task, synthesis_format)
         spans.append(
             self._span(
                 "synthesis",

@@ -194,16 +194,18 @@ for source in result.sources:
     print(source.url, source.trust_score)
 ```
 
-`AgentWebEngine` also exposes `extract`, `create_monitor`, and `check_monitor`. Use `MemoryStore` with a custom SQLite path when an application needs explicit data-location control.
+`AgentWebEngine` also exposes `extract`, `create_monitor`, and `check_monitor`. The package additionally exports deterministic `Planner`, `Router`, `Plan`, `PlanStep`, `ToolCall`, and `SkillRegistry` contracts for local orchestration. Use `MemoryStore` with a custom SQLite path when an application needs explicit data-location control.
 
 ## Architecture
 
-The implemented path is intentionally direct while preserving the interfaces described by the project documents:
+The implemented path is intentionally local-first while preserving the interfaces described by the project documents. `AgentWebEngine.solve` now creates an explicit plan, routes it to bounded local tool calls, and then runs the existing memory, search, extraction, ranking, and synthesis stages:
 
 ```mermaid
 flowchart LR
     Client[Client] --> API[HTTP API]
     API --> Engine[AgentWebEngine]
+    Engine --> Planner[Planner and Skills]
+    Planner --> Router[Router and Tool Calls]
     API --> Secrets[Secret provider]
     Engine --> Search[Search adapter]
     Engine --> Fetch[HTTP fetch and extraction]
@@ -221,7 +223,7 @@ flowchart LR
     Scheduler --> Monitor
 ```
 
-The longer-term architecture adds richer planning, routing, graph reasoning, and synthesis layers. Rendered browser execution, durable scheduled monitor jobs, durable crawl history, optional coordinator-backed crawl throttling, a bounded spawned browser-worker pool, and encrypted origin-bound browser session state are implemented as local-first foundations; full relational runtime cutover remains future work.
+The longer-term architecture adds public plan/execute APIs, connector-specific routing, graph reasoning, learning-loop persistence, and richer synthesis. Rendered browser execution, durable scheduled monitor jobs, durable crawl history, optional coordinator-backed crawl throttling, a bounded spawned browser-worker pool, encrypted origin-bound browser session state, and the internal planner/router/skills layer are implemented as local-first foundations; full relational runtime cutover remains future work.
 
 ## Data and persistence
 

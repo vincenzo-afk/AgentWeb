@@ -10,14 +10,18 @@ The planner is the first stage after intent input: it determines what kind of in
 
 ## Outputs
 
-A **plan**: an ordered (or partially ordered) set of steps to hand to the [Router](router.md), along with an estimated retrieval mode if none was specified.
+A **plan**: an ordered set of serializable `PlanStep` objects to hand to the [Router](router.md), along with an estimated retrieval mode if none was specified. The local planner emits a bounded plan identifier, intent classification, optional matched skill name, and concrete step parameters without persisting task content.
 
 ## Responsibilities
 
 - Classify task intent (lookup, comparison, monitoring, longitudinal tracking, etc.)
 - Decide depth (how many sources, how much browsing vs. static search)
 - Decide whether a matching Internet Skill template applies
-- Produce a plan inspectable via `internet.plan()` (see [api/reference/agents.md](../api/reference/agents.md))
+- Produce a plan inspectable through the Python `Planner.plan()` contract and used internally by `/solve`; the public `/plan` and `/execute` endpoints remain deferred (see [api/reference/agents.md](../api/reference/agents.md))
+
+## Current local implementation
+
+The local MVP provides deterministic `Planner`, `Plan`, and `PlanStep` objects. Built-in matching currently covers comparison, current price/availability lookup, and source-summary tasks. An explicitly named unknown skill fails closed with a validation error; an unmatched task falls back to a conservative focus-style search, extraction, ranking, and synthesis plan.
 
 ## Learning loop
 

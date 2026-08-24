@@ -300,6 +300,61 @@ class AgentWebTests(unittest.TestCase):
         ]
         self.assertEqual(rank(sources, "research task")[0].source.id, "b")
 
+    def test_planner_matches_skills_and_estimates_modes(self):
+        from agentweb.planner import Planner
+
+        planner = Planner()
+        comparison = planner.plan("Compare two laptops for price and performance")
+        self.assertEqual(comparison.skill, "comparison")
+        self.assertEqual(comparison.estimated_mode, "dive")
+        self.assertEqual([step.type for step in comparison.steps], ["search", "extract", "rank", "synthesize"])
+        self.assertEqual(comparison.steps[0].params["task"], "Compare two laptops for price and performance")
+        self.assertEqual(comparison.to_dict()["steps"][0]["type"], "search")
+
+        direct = planner.plan(f"Summarize {self.url}")
+        self.assertEqual(direct.skill, "source_summary")
+        self.assertEqual(direct.estimated_mode, "focus")
+        self.assertEqual(direct.steps[0].params["urls"], [self.url])
+        with self.assertRaisesRegex(ValueError, "unknown skill"):
+            planner.plan("Do work", skill="not-a-skill")
+
+    def test_router_expands_plan_steps_into_bounded_tool_calls(self):
+        from agentweb.planner import Plan, PlanStep
+        from agentweb.router import Router
+
+        plan = Plan(
+            id="plan_test",
+            steps=(
+                PlanStep("search_each_item", {"limit": 5}),
+                PlanStep("extract", {"urls": ["https://one.example", "https://two.example", "https://three.example"]}),
+                PlanStep("rank_sources"),
+                PlanStep("synthesize_comparison"),
+            ),
+            estimated_mode="dive",
+            intent="comparison",
+            skill="comparison",
+        )
+        calls = Router().route(plan)
+        self.assertEqual([call.tool for call in calls], ["search", "extract", "extract", "extract", "rank", "synthesize"])
+        self.assertEqual([call.params["url"] for call in calls[1:4]], ["https://one.example", "https://two.example", "https://three.example"])
+        self.assertEqual(calls[0].params["limit"], 5)
+        with self.assertRaisesRegex(ValueError, "unsupported plan step"):
+            Router().route(Plan("plan_bad", (PlanStep("unknown"),), "focus", "lookup"))
+
+    def test_explicit_skill_selects_its_mode_and_rendering(self):
+        response = self.engine.solve(f"Evaluate {self.url}", skill="comparison")
+        self.assertEqual(response.mode, "dive")
+        self.assertEqual(response.output_format, "comparison")
+        self.assertTrue(response.citations)
+
+    def test_solve_records_explicit_planner_skill_span(self):
+        response = self.engine.solve(f"Summarize {self.url}")
+        trace = self.engine.traces.get(response.execution_id)
+        planner_spans = [span for span in trace["spans"] if span["component"] == "planner"]
+        self.assertEqual(len(planner_spans), 1)
+        self.assertIn("skill=source_summary", planner_spans[0]["output_summary"])
+        self.assertIn("steps=4", planner_spans[0]["output_summary"])
+
     def test_nullable_monitor_policy_is_accepted_by_relational_row_preparation(self):
         row = {
             "id": "monitor-1",

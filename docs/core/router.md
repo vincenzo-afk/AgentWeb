@@ -10,6 +10,10 @@ The router takes the planner's output and selects concrete execution paths: whic
 - Balance cost/latency against the requested [retrieval mode](../concepts/retrieval-modes.md)
 - Hand off gathered evidence to [Memory](memory.md) (for reuse checks) and ultimately [Synthesis](synthesis.md)
 
+## Current local implementation
+
+The local MVP exposes a deterministic `Router.route(plan)` contract returning serializable `ToolCall` objects. It expands bounded URL lists into individual extraction calls and maps the reusable aliases `search_each_item`, `extract_price_and_specs`, `rank_sources`, and `synthesize_comparison` to the corresponding local primitives. Unsupported step types fail closed with a validation error.
+
 ## Design notes
 
 The router is deliberately separate from the planner so that routing strategy (which sources/tools to prefer) can evolve independently of task classification logic. This also makes it possible to swap or extend connectors (see [guides/building-connectors.md](../guides/building-connectors.md)) without touching planning logic.
