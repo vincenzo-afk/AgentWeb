@@ -470,6 +470,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         request_id = "req_" + uuid.uuid4().hex[:16]
+        self._request_id = request_id
         path, versioned = _normalize_api_path(urlparse(self.path).path)
         self._legacy_api_path = not versioned
         self._canonical_api_path = "/v1" if path == "/" else "/v1" + path
