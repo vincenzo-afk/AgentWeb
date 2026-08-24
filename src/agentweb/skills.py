@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Any
 
+from .vector_store import VectorStore
+
 
 @dataclass(frozen=True)
 class Skill:
@@ -36,9 +38,10 @@ class Skill:
 class SkillRegistry:
     """Thread-safe registry with deterministic similarity matching."""
 
-    def __init__(self, skills: list[Skill] | None = None) -> None:
+    def __init__(self, skills: list[Skill] | None = None, vector_store: VectorStore | None = None) -> None:
         self._skills: dict[str, Skill] = {}
         self._lock = RLock()
+        self.vectors = vector_store or VectorStore()
         for skill in skills or []:
             self.register(skill)
 
@@ -56,6 +59,7 @@ class SkillRegistry:
             raise ValueError("skill success_rate must be between 0 and 1")
         with self._lock:
             self._skills[name] = skill
+            self.vectors.upsert("skills", name, f"{name} {skill.description}", {"name": name, "success_rate": float(skill.success_rate)})
 
     def get(self, name: str) -> Skill | None:
         with self._lock:
@@ -83,10 +87,18 @@ class SkillRegistry:
                 score = overlap * 2.0 + description_overlap * 0.25
                 candidates.append((score, float(skill.success_rate), name, skill))
             if not candidates:
+                vector_matches = self.vectors.nearest(self.vectors.embed(task), k=1, namespace="skills")
+                if vector_matches and vector_matches[0].score >= 0.50:
+                    return self._skills.get(vector_matches[0].metadata.get("name", vector_matches[0].item_id))
                 return None
             candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
             best = candidates[0]
-            return best[3] if best[0] >= 2.0 else None
+            if best[0] >= 2.0:
+                return best[3]
+            vector_matches = self.vectors.nearest(self.vectors.embed(task), k=1, namespace="skills")
+            if vector_matches and vector_matches[0].score >= 0.50:
+                return self._skills.get(vector_matches[0].metadata.get("name", vector_matches[0].item_id))
+            return None
 
 
 def built_in_skill_registry() -> SkillRegistry:

@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .vector_store import VectorStore
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -120,6 +122,7 @@ class GraphStore:
     def __init__(self, path: str | Path = "agentweb.sqlite3") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.vectors = VectorStore(self.path)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -231,6 +234,14 @@ class GraphStore:
                 (org_id, entity_type, normalized),
             ).fetchone()
             if row is None:
+                query_vector = self.vectors.embed(f"{entity_type} {name}")
+                nearest = self.vectors.nearest(query_vector, k=5, namespace=f"entities:{org_id}")
+                candidate = next((item for item in nearest if item.score >= 0.90 and item.metadata.get("type") == entity_type), None)
+                if candidate is not None:
+                    row = connection.execute(
+                        "SELECT * FROM graph_entities WHERE id=? AND org_id=?", (candidate.item_id, org_id)
+                    ).fetchone()
+            if row is None:
                 connection.execute(
                     "INSERT INTO graph_entities (id, org_id, entity_type, name, name_normalized, attributes_json, confidence, source_ids_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (entity_id, org_id, entity_type, name, normalized, json.dumps(attributes, sort_keys=True), confidence, json.dumps(sources), now, now),
@@ -247,7 +258,11 @@ class GraphStore:
             result = connection.execute("SELECT * FROM graph_entities WHERE id=? AND org_id=?", (entity_id, org_id)).fetchone()
             if result is None:
                 raise RuntimeError("entity upsert failed")
-            return self._entity(result)
+            resolved = self._entity(result)
+        self.vectors.upsert(
+            f"entities:{org_id}", resolved.id, f"{resolved.type} {resolved.name}", {"type": resolved.type, "name": resolved.name}
+        )
+        return resolved
 
     def upsert_relation(
         self,
