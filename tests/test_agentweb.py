@@ -836,6 +836,34 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(result.last_event, "check_failed")
         self.assertIsNotNone(result.last_error)
 
+    def test_monitor_failure_triggers_only_check_failed_workflow(self):
+        monitor = self.engine.create_monitor("Watch http://127.0.0.1:1/unreachable", "daily")
+        self.engine.workflows.create(
+            "Failure workflow",
+            monitor.id,
+            "Investigate {error}",
+            event="monitor.check_failed",
+        )
+        self.engine.workflows.create(
+            "No-change workflow",
+            monitor.id,
+            "Summarize {target}",
+            event="monitor.no_change",
+        )
+        result = self.engine.check_monitor(monitor)
+        self.assertEqual(result.last_event, "check_failed")
+        runs = self.engine.workflows.list_runs("development")
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["event"], "monitor.check_failed")
+        self.assertEqual(runs[0]["status"], "queued")
+        jobs = [job for job in self.store.list_jobs("pending", "development") if job["job_type"] == "workflow_run"]
+        self.assertEqual(len(jobs), 1)
+        payload = json.loads(jobs[0]["payload_json"])
+        self.assertEqual(payload["run_id"], runs[0]["id"])
+        self.assertEqual(payload["values"]["event"], "check_failed")
+        self.assertIn("error", payload["values"])
+        self.assertTrue(payload["values"]["error"])
+
     def test_scheduler_lease_token_blocks_stale_worker_after_reclaim(self):
         monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
         first = self.store.claim_due_job(time.time(), lease_seconds=1, org_id="development")
