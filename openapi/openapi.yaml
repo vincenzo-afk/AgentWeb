@@ -18,7 +18,17 @@ paths:
       operationId: health
       responses:
         '200':
-          description: Service is healthy
+          description: Service and local dependencies are healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service is degraded because a local dependency check failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
   /report/{execution_id}:
     get:
       summary: Retrieve a secret-safe execution trace
@@ -557,6 +567,21 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    HealthResponse:
+      type: object
+      required: [status, service, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        service:
+          type: string
+          example: agentweb
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, failed, disabled]
     Mode:
       type: string
       enum: [flash, focus, dive, monitor]

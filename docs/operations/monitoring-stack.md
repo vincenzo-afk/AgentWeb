@@ -18,3 +18,5 @@ Alerts are tied to the [SLO targets](sla-slo.md); paging alerts are reserved for
 ## Storage boundary
 
 In local development, metric counters, observations, and gauges are durable in SQLite. With `AGENTWEB_DISTRIBUTED_QUEUE=1` and a PostgreSQL `DATABASE_URL`, the same metrics are aggregated in the shared `metric_points` table through the bounded PostgreSQL coordinator used for queue leases and organization rate limits. This mode is opt-in and does not claim a full business-record runtime migration; the PostgreSQL path must fail closed when distributed mode is requested without a PostgreSQL URL.
+
+The unauthenticated `GET /health` endpoint performs non-sensitive checks for memory, metrics, audit storage, and the optional queue coordinator. It returns `200` with `status: ok` when all enabled checks pass, or `503` with `status: degraded` and per-component `ok`, `failed`, or `disabled` statuses when a dependency check fails. It never returns database URLs, credentials, filesystem paths, or exception details.

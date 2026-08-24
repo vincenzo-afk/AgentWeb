@@ -98,6 +98,13 @@ class MetricStore:
                 (_org(labels), key, float(value), now),
             )
 
+    def health(self) -> bool:
+        try:
+            with self._connect() as connection:
+                return connection.execute("SELECT 1").fetchone()[0] == 1
+        except sqlite3.Error:
+            return False
+
     def snapshot(self, org_id: str | None = None) -> dict[str, dict[str, float | int]]:
         with self._connect() as connection:
             if org_id is None:
@@ -152,6 +159,10 @@ class PostgresMetricStore:
                     "ON CONFLICT(org_id, metric_key, kind) DO UPDATE SET gauge_value=EXCLUDED.gauge_value, updated_at=CURRENT_TIMESTAMP",
                     (_org(labels), key, float(value)),
                 )
+
+    def health(self) -> bool:
+        health = getattr(self.coordinator, "health", None)
+        return bool(health()) if callable(health) else False
 
     def snapshot(self, org_id: str | None = None) -> dict[str, dict[str, float | int]]:
         with self.coordinator.connection() as connection:
@@ -240,6 +251,9 @@ class MetricsRegistry:
                 "gauges": {key: value for key, value in self._gauges.items() if visible(key)},
                 "captured_at": time.time(),
             }
+
+    def health(self) -> bool:
+        return bool(self.store.health()) if self.store and hasattr(self.store, "health") else self.store is None
 
     def purge_expired(self, retention_seconds: float, now: float | None = None, org_id: str | None = None) -> int:
         return self.store.purge_expired(retention_seconds, now=now, org_id=org_id) if self.store else 0

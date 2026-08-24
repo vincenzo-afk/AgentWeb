@@ -791,6 +791,27 @@ class AgentWebTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 payload = json.loads(response.read())
             self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["service"], "agentweb")
+            self.assertEqual(payload["checks"]["memory"], "ok")
+            self.assertEqual(payload["checks"]["metrics"], "ok")
+            self.assertEqual(payload["checks"]["audit"], "ok")
+            self.assertEqual(payload["checks"]["queue"], "disabled")
+        finally:
+            stop_test_server(server, thread)
+
+    def test_health_reports_degraded_metric_backend_without_details(self):
+        server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "health-degraded.sqlite3"))
+        server.engine.metrics.health = lambda: False
+        thread = start_test_server(server)
+        try:
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"http://127.0.0.1:{server.server_port}/health"))
+            self.assertEqual(raised.exception.code, 503)
+            payload = json.loads(raised.exception.read())
+            self.assertEqual(payload["status"], "degraded")
+            self.assertEqual(payload["checks"]["metrics"], "failed")
+            self.assertNotIn("sqlite", json.dumps(payload).lower())
+            self.assertNotIn("password", json.dumps(payload).lower())
         finally:
             stop_test_server(server, thread)
 

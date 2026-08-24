@@ -28,6 +28,13 @@ class MemoryStore:
         connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
+    def health(self) -> bool:
+        try:
+            with self._connect() as connection:
+                return connection.execute("SELECT 1").fetchone()[0] == 1
+        except sqlite3.Error:
+            return False
+
     def _init_db(self) -> None:
         with self._connect() as connection:
             snapshot_columns = {row[1] for row in connection.execute("PRAGMA table_info(snapshots)")}

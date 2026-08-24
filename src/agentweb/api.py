@@ -230,6 +230,26 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         if key and request_hash:
             self.engine.memory.release_idempotency(principal.org_id, key, request_hash)
 
+    def _health_payload(self) -> dict[str, object]:
+        checks: dict[str, str] = {}
+
+        def check(name: str, probe) -> None:
+            try:
+                checks[name] = "ok" if probe() else "failed"
+            except Exception:
+                checks[name] = "failed"
+
+        check("memory", self.engine.memory.health)
+        check("metrics", self.metrics.health)
+        check("audit", self.server.authenticator.key_store.health)  # type: ignore[attr-defined]
+        coordinator = getattr(self.server, "queue_coordinator", None)
+        if coordinator is None:
+            checks["queue"] = "disabled"
+        else:
+            check("queue", getattr(coordinator, "health", lambda: False))
+        healthy = all(value in {"ok", "disabled"} for value in checks.values())
+        return {"status": "ok" if healthy else "degraded", "service": "agentweb", "checks": checks}
+
     def do_OPTIONS(self) -> None:  # noqa: N802
         self._send_json(HTTPStatus.NO_CONTENT)
 
@@ -239,7 +259,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         path = parsed_url.path
         query = parse_qs(parsed_url.query)
         if path == "/health":
-            self._send_json(HTTPStatus.OK, {"status": "ok", "service": "agentweb"}, request_id)
+            payload = self._health_payload()
+            status = HTTPStatus.OK if payload["status"] == "ok" else HTTPStatus.SERVICE_UNAVAILABLE
+            self._send_json(status, payload, request_id)
             return
         if path.startswith("/admin/"):
             scope = "admin:*"

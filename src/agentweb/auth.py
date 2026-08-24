@@ -92,6 +92,13 @@ class KeyStore:
                 ("development", "Local development", time.time()),
             )
 
+    def health(self) -> bool:
+        try:
+            with self._connect() as connection:
+                return connection.execute("SELECT 1").fetchone()[0] == 1
+        except sqlite3.Error:
+            return False
+
     @staticmethod
     def _hash_secret(secret: str, salt: bytes | None = None) -> str:
         salt = salt or secrets.token_bytes(16)
