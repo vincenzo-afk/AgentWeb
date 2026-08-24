@@ -975,20 +975,33 @@ components:
           $ref: '#/components/schemas/ChangePolicy'
     ChangePolicy:
       type: object
+      description: Deterministic monitor comparison policy. For structured_field, field_path and expected_type select one bounded parsed projection value; numeric thresholds are valid only for expected_type price, and required_state is valid only for availability.
       additionalProperties: false
       properties:
         kind:
           type: string
-          enum: [full_content, price, availability]
+          enum: [full_content, price, availability, structured_field]
+        field_path:
+          type: string
+          description: Bounded dotted object/list path used when kind is structured_field, such as tables.0.1.1 or data.price; this is not arbitrary JSONPath.
+          pattern: '^[A-Za-z_][A-Za-z0-9_-]*(?:\\.(?:[A-Za-z_][A-Za-z0-9_-]*|[0-9]+))*(?:\\.[0-9]+)?$'
+        expected_type:
+          type: string
+          enum: [string, entity, price, date]
+          description: Normalization type for a structured field. Use string, entity, price, or date; defaults to string.
+          default: string
         absolute_delta:
           type: number
           minimum: 0
+          description: Minimum numeric absolute price delta for a structured price field; invalid for other expected types.
         relative_delta_percent:
           type: number
           minimum: 0
           maximum: 10000
+          description: Minimum relative price delta percentage for a structured price field; invalid for other expected types.
         required_state:
           type: string
+          description: Availability target state; invalid for structured_field.
           enum: [in stock, out of stock, available, unavailable, sold out]
         ignore_whitespace:
           type: boolean

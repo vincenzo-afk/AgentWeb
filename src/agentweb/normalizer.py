@@ -110,15 +110,15 @@ def _month_number(text: str) -> str:
     return normalized
 
 
-def _date(raw: object) -> NormalizedField:
+def _date(raw: object, expected_type: str = "date") -> NormalizedField:
     text = str(raw).strip()
     candidates = [text, text.replace("Z", "+00:00")]
     for candidate in candidates:
         try:
             parsed = datetime.fromisoformat(candidate)
             return NormalizedField(
-                value=parsed.isoformat().replace("+00:00", "Z"),
-                expected_type="date",
+                value=(parsed.isoformat().replace("+00:00", "Z") if expected_type == "datetime" else parsed.date().isoformat()),
+                expected_type=expected_type,
                 normalized=True,
                 raw=raw,
                 confidence=0.95,
@@ -135,11 +135,11 @@ def _date(raw: object) -> NormalizedField:
         try:
             parsed = datetime.strptime(normalized_text, fmt)
             return NormalizedField(
-                value=parsed.date().isoformat(), expected_type="date", normalized=True, raw=raw, confidence=0.90
+                value=(parsed.isoformat() if expected_type == "datetime" else parsed.date().isoformat()), expected_type=expected_type, normalized=True, raw=raw, confidence=0.90
             )
         except ValueError:
             continue
-    return NormalizedField(value=raw, expected_type="date", normalized=False, raw=raw, confidence=0.20)
+    return NormalizedField(value=raw, expected_type=expected_type, normalized=False, raw=raw, confidence=0.20)
 
 
 def _entity(raw: object) -> NormalizedField:
@@ -154,7 +154,7 @@ def normalize(raw: object, expected_type: str) -> NormalizedField:
     if kind == "price":
         return _price(raw)
     if kind in {"date", "datetime"}:
-        return _date(raw)
+        return _date(raw, kind)
     if kind in {"entity", "entity_name", "string"}:
         return _entity(raw)
     return NormalizedField(value=raw, expected_type=kind, normalized=False, raw=raw, confidence=0.20 if raw not in (None, "") else 0.0)

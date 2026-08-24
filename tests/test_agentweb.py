@@ -44,10 +44,11 @@ from agentweb.redaction import redact_text
 class FixtureHandler(BaseHTTPRequestHandler):
     default_body = b"<html><head><title>Fixture</title><meta name='description' content='A fixture page'></head><body><h1>Hello</h1><p>AgentWeb test content.</p><a href='/next'>Next</a></body></html>"
     body = default_body
+    content_type = "text/html; charset=utf-8"
 
     def do_GET(self):  # noqa: N802
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", self.content_type)
         self.end_headers()
         self.wfile.write(self.body)
 
@@ -77,6 +78,7 @@ class AgentWebTests(unittest.TestCase):
     def setUp(self):
         os.environ["AGENTWEB_ALLOW_PRIVATE_TARGETS"] = "1"
         FixtureHandler.body = FixtureHandler.default_body
+        FixtureHandler.content_type = "text/html; charset=utf-8"
         self.fixture = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
         self.thread = start_test_server(self.fixture)
         self.url = f"http://127.0.0.1:{self.fixture.server_port}/fixture"
@@ -371,6 +373,24 @@ class AgentWebTests(unittest.TestCase):
         older = Source("old", "https://old.example", "Old", "current", trust_score=0.6, published_at="2020-01-01T00:00:00Z", content_type="application/octet-stream", extraction_confidence=0.1)
         self.assertEqual(rank([older, newer], "current")[0].source.id, "new")
 
+    def test_legacy_snapshot_schema_migrates_with_null_structured_data(self):
+        legacy_path = Path(self.temp_dir.name) / "legacy-snapshots.sqlite3"
+        content = "legacy content"
+        with sqlite3.connect(legacy_path) as connection:
+            connection.execute("CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, content_hash TEXT NOT NULL, content TEXT NOT NULL, captured_at TEXT NOT NULL)")
+            connection.execute("INSERT INTO snapshots(target, content_hash, content, captured_at) VALUES (?, ?, ?, ?)", ("legacy-target", MemoryStore.content_hash(content), content, "2026-08-24T00:00:00Z"))
+        migrated = MemoryStore(legacy_path)
+        latest = migrated.get_latest("legacy-target", "legacy")
+        self.assertEqual(latest["content"], content)
+        self.assertIsNone(latest["structured_data"])
+        self.assertEqual(migrated.list_snapshots("legacy-target", "legacy")[0]["org_id"], "legacy")
+
+    def test_snapshot_projection_is_immutable_for_duplicate_content_hashes(self):
+        self.store.snapshot("same-target", "same content", "first", "org-a", {"data": {"value": 1}})
+        self.store.snapshot("same-target", "same content", "second", "org-a", {"data": {"value": 2}})
+        latest = self.store.get_latest("same-target", "org-a")
+        self.assertEqual(latest["structured_data"], {"data": {"value": 1}})
+
     def test_snapshot_history_and_diff(self):
         self.assertFalse(self.store.save_snapshot("target", self.url, "first", "now"))
         first = self.store.get_latest("target")
@@ -484,6 +504,61 @@ class AgentWebTests(unittest.TestCase):
         self.assertTrue(meaningful("watch availability", "Item out of stock", "Item in stock", {"kind": "availability", "required_state": "in stock"})[0])
         self.assertFalse(meaningful("watch page", "A   B", "A B", {"kind": "full_content", "ignore_whitespace": True})[0])
         self.assertTrue(meaningful("watch page", "A B", "A C", {"kind": "full_content", "ignore_whitespace": True})[0])
+
+    def test_monitor_structured_field_policy_persists_and_detects_normalized_changes(self):
+        original = FixtureHandler.body
+        try:
+            FixtureHandler.body = b"<html><body><table><tr><td>$100.00</td></tr></table><p>Stable text.</p></body></html>"
+            monitor = self.engine.create_monitor(
+                f"Watch the product table price for {self.url}",
+                "hourly",
+                change_policy={"kind": "structured_field", "field_path": "tables.0.0.0", "expected_type": "price", "absolute_delta": 5},
+            )
+            self.assertEqual(self.engine.check_monitor(monitor).last_event, "no_change")
+            stored = self.store.get_latest(self.url, "development")
+            self.assertEqual(stored["structured_data"]["tables"][0][0][0], "$100.00")
+            FixtureHandler.body = b"<html><body><table><tr><td>$100.00</td></tr></table><p>Changed text only.</p></body></html>"
+            self.assertEqual(self.engine.check_monitor(monitor).last_event, "no_change")
+            FixtureHandler.body = b"<html><body><table><tr><td>$103.00</td></tr></table><p>Changed text only.</p></body></html>"
+            self.assertEqual(self.engine.check_monitor(monitor).last_event, "no_change")
+            FixtureHandler.body = b"<html><body><table><tr><td>$110.00</td></tr></table><p>Changed text only.</p></body></html>"
+            self.assertEqual(self.engine.check_monitor(monitor).last_event, "change_detected")
+            self.assertEqual(self.store.get_monitor(monitor.id, "development").change_policy["field_path"], "tables.0.0.0")
+        finally:
+            FixtureHandler.body = original
+
+    def test_monitor_structured_json_path_and_string_whitespace_normalization(self):
+        original_body, original_type = FixtureHandler.body, FixtureHandler.content_type
+        try:
+            FixtureHandler.content_type = "application/json"
+            FixtureHandler.body = b'{"price":"$100.00","status":"ready"}'
+            monitor = self.engine.create_monitor(
+                f"Watch JSON price for {self.url}",
+                "hourly",
+                change_policy={"kind": "structured_field", "field_path": "data.price", "expected_type": "price", "relative_delta_percent": 10},
+            )
+            self.assertEqual(self.engine.check_monitor(monitor).last_event, "no_change")
+            FixtureHandler.body = b'{"price":"$105.00","status":"ready"}'
+            self.assertEqual(self.engine.check_monitor(monitor).last_event, "no_change")
+            FixtureHandler.body = b'{"price":"$120.00","status":"ready"}'
+            self.assertEqual(self.engine.check_monitor(monitor).last_event, "change_detected")
+
+            whitespace_policy = {"kind": "structured_field", "field_path": "data.status", "expected_type": "string", "ignore_whitespace": True}
+            self.assertFalse(self.engine._meaningful_change("watch status", "old", "new", whitespace_policy, {"data": {"status": " ready  now "}}, {"data": {"status": "ready now"}})[0])
+        finally:
+            FixtureHandler.body, FixtureHandler.content_type = original_body, original_type
+
+    def test_monitor_structured_field_comparison_supports_dates_and_missing_values(self):
+        policy = {"kind": "structured_field", "field_path": "data.date", "expected_type": "date"}
+        meaningful = self.engine._meaningful_change
+        self.assertFalse(meaningful("watch date", "same", "different", policy, {"data": {"date": "15 août 2026"}}, {"data": {"date": "2026-08-15"}})[0])
+        self.assertTrue(meaningful("watch date", "same", "different", policy, {"data": {"date": "15 août 2026"}}, {"data": {"date": "2026-08-16"}})[0])
+        entity_policy = {"kind": "structured_field", "field_path": "data.entity", "expected_type": "entity"}
+        self.assertFalse(meaningful("watch entity", "same", "different", entity_policy, {"data": {"entity": "Acme  Corporation"}}, {"data": {"entity": "acme corporation"}})[0])
+        missing_policy = {"kind": "structured_field", "field_path": "data.value"}
+        self.assertFalse(meaningful("watch field", "same", "different", missing_policy, {"data": {}}, {"data": {}})[0])
+        self.assertTrue(meaningful("watch field", "same", "different", missing_policy, {"data": {"value": "old"}}, {"data": {}})[0])
+        self.assertTrue(meaningful("watch field", "same", "different", missing_policy, {"data": {}}, {"data": {"value": "new"}})[0])
 
     def test_monitor_task_aware_price_policy_ignores_irrelevant_changes(self):
         FixtureHandler.body = b"<html><body>Widget price $10. Stable description.</body></html>"
@@ -1139,7 +1214,29 @@ class AgentWebTests(unittest.TestCase):
                 fetched = json.loads(response.read())
             self.assertEqual(fetched["change_policy"]["required_state"], "in stock")
 
-            for invalid_policy in ({"kind": "other"}, {"kind": "price", "absolute_delta": -1}, {"kind": "price", "relative_delta_percent": "5"}, {"kind": "availability", "required_state": "maybe"}):
+            structured_body = json.dumps({
+                "task": f"Watch {self.url}",
+                "frequency": "daily",
+                "change_policy": {"kind": "structured_field", "field_path": "tables.0.0", "expected_type": "price", "absolute_delta": 5},
+            }).encode()
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe", data=structured_body, method="POST", headers=headers)) as response:
+                structured_created = json.loads(response.read())
+            self.assertEqual(structured_created["change_policy"]["kind"], "structured_field")
+            self.assertEqual(structured_created["change_policy"]["field_path"], "tables.0.0")
+            with urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe/{structured_created['id']}", headers=headers)) as response:
+                structured_fetched = json.loads(response.read())
+            self.assertEqual(structured_fetched["change_policy"]["expected_type"], "price")
+
+            for invalid_policy in (
+                {"kind": "other"},
+                {"kind": "price", "absolute_delta": -1},
+                {"kind": "price", "relative_delta_percent": "5"},
+                {"kind": "availability", "required_state": "maybe"},
+                {"kind": "structured_field"},
+                {"kind": "structured_field", "field_path": "tables..0"},
+                {"kind": "structured_field", "field_path": "data.value", "expected_type": "boolean"},
+                {"kind": "structured_field", "field_path": "data.value", "expected_type": "string", "absolute_delta": 1},
+            ):
                 invalid_body = json.dumps({"task": f"Watch {self.url}", "frequency": "daily", "change_policy": invalid_policy}).encode()
                 with self.assertRaises(HTTPError) as raised:
                     urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe", data=invalid_body, method="POST", headers=headers))

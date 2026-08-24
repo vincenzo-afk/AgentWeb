@@ -50,6 +50,7 @@ class MemoryStore:
                     content_hash TEXT NOT NULL,
                     content TEXT NOT NULL,
                     captured_at TEXT NOT NULL,
+                    structured_data_json TEXT,
                     UNIQUE(org_id, target, content_hash)
                 );
                 CREATE INDEX IF NOT EXISTS idx_snapshots_org_target_time
@@ -146,6 +147,9 @@ class MemoryStore:
                     ON usage_records(org_id, period);
                 """
             )
+            snapshot_columns = {row[1] for row in connection.execute("PRAGMA table_info(snapshots)")}
+            if snapshot_columns and "structured_data_json" not in snapshot_columns:
+                connection.execute("ALTER TABLE snapshots ADD COLUMN structured_data_json TEXT")
             monitor_columns = {row[1] for row in connection.execute("PRAGMA table_info(monitors)")}
             if monitor_columns and "org_id" not in monitor_columns:
                 connection.execute("ALTER TABLE monitors ADD COLUMN org_id TEXT NOT NULL DEFAULT 'legacy'")
@@ -163,8 +167,8 @@ class MemoryStore:
                 legacy_columns = {row[1] for row in connection.execute("PRAGMA table_info(snapshots_legacy)")}
                 target_column = "target" if "target" in legacy_columns else "key"
                 connection.execute(
-                    f"INSERT OR IGNORE INTO snapshots(org_id, target, content_hash, content, captured_at) "
-                    f"SELECT 'legacy', {target_column}, content_hash, content, captured_at FROM snapshots_legacy"
+                    f"INSERT OR IGNORE INTO snapshots(org_id, target, content_hash, content, captured_at, structured_data_json) "
+                    f"SELECT 'legacy', {target_column}, content_hash, content, captured_at, NULL FROM snapshots_legacy"
                 )
                 connection.execute("DROP TABLE snapshots_legacy")
 
@@ -172,14 +176,24 @@ class MemoryStore:
     def content_hash(content: str) -> str:
         return hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
 
-    def get_latest(self, target: str, org_id: str = "development") -> dict[str, str] | None:
+    @staticmethod
+    def _snapshot_row(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        encoded = result.pop("structured_data_json", None)
+        try:
+            result["structured_data"] = json.loads(encoded) if encoded else None
+        except (TypeError, json.JSONDecodeError):
+            result["structured_data"] = None
+        return result
+
+    def get_latest(self, target: str, org_id: str = "development") -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT org_id, target, content_hash, content, captured_at FROM snapshots "
+                "SELECT org_id, target, content_hash, content, captured_at, structured_data_json FROM snapshots "
                 "WHERE org_id = ? AND target = ? ORDER BY id DESC LIMIT 1",
                 (org_id, target),
             ).fetchone()
-        return dict(row) if row else None
+        return self._snapshot_row(row) if row else None
 
     def get_snapshot(self, key: str, org_id: str = "development") -> dict[str, str] | None:
         return self.get_latest(key, org_id)
@@ -259,23 +273,39 @@ class MemoryStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def snapshot(self, target: str, content: str, captured_at: str, org_id: str = "development") -> dict[str, str]:
+    def snapshot(
+        self,
+        target: str,
+        content: str,
+        captured_at: str,
+        org_id: str = "development",
+        structured_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         content_hash = self.content_hash(content)
+        encoded = json.dumps(structured_data, separators=(",", ":"), ensure_ascii=False) if structured_data is not None else None
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO snapshots(org_id, target, content_hash, content, captured_at) VALUES(?, ?, ?, ?, ?)",
-                (org_id, target, content_hash, content, captured_at),
+                "INSERT OR IGNORE INTO snapshots(org_id, target, content_hash, content, captured_at, structured_data_json) VALUES(?, ?, ?, ?, ?, ?)",
+                (org_id, target, content_hash, content, captured_at, encoded),
             )
             row = connection.execute(
-                "SELECT org_id, target, content_hash, content, captured_at FROM snapshots "
+                "SELECT org_id, target, content_hash, content, captured_at, structured_data_json FROM snapshots "
                 "WHERE org_id = ? AND target = ? AND content_hash = ?",
                 (org_id, target, content_hash),
             ).fetchone()
-        return dict(row)
+        return self._snapshot_row(row)
 
-    def save_snapshot(self, key: str, url: str, content: str, captured_at: str, org_id: str = "development") -> bool:
+    def save_snapshot(
+        self,
+        key: str,
+        url: str,
+        content: str,
+        captured_at: str,
+        org_id: str = "development",
+        structured_data: dict[str, Any] | None = None,
+    ) -> bool:
         previous = self.get_latest(key, org_id)
-        self.snapshot(key, content, captured_at, org_id)
+        self.snapshot(key, content, captured_at, org_id, structured_data)
         return previous is not None and previous["content_hash"] != self.content_hash(content)
 
     def reusable_snapshot(self, target: str, org_id: str = "development", max_age_seconds: int = 86_400, now: float | None = None) -> dict[str, str] | None:

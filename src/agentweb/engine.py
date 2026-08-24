@@ -29,6 +29,7 @@ from .trace import Span, TraceStore
 from .trust_engine import TrustEngine
 
 URL_RE = re.compile(r"https?://[^\s)\]>]+")
+_MISSING_FIELD = object()
 
 
 class AgentWebEngine:
@@ -75,6 +76,17 @@ class AgentWebEngine:
     @staticmethod
     def _source_id(url: str) -> str:
         return "src_" + uuid.uuid5(uuid.NAMESPACE_URL, url).hex[:12]
+
+    @staticmethod
+    def _structured_projection(parsed: object, text: str) -> dict[str, object]:
+        return {
+            "title": getattr(parsed, "title", ""),
+            "text": text,
+            "links": list(getattr(parsed, "links", []) or []),
+            "tables": [table[:20] for table in (getattr(parsed, "tables", []) or [])[:5]],
+            "entities": list((getattr(parsed, "entities", []) or [])[:30]),
+            "data": getattr(parsed, "data", None),
+        }
 
     @staticmethod
     def _span(component: str, operation: str, started: float, status: str, input_summary: str, output_summary: str) -> Span:
@@ -361,13 +373,17 @@ class AgentWebEngine:
             return None
         if not isinstance(policy, dict):
             raise ValueError("change_policy must be an object")
-        allowed = {"kind", "absolute_delta", "relative_delta_percent", "required_state", "ignore_whitespace"}
+        allowed = {
+            "kind", "absolute_delta", "relative_delta_percent", "required_state", "ignore_whitespace",
+            "field_path", "expected_type",
+        }
         unknown = set(policy) - allowed
         if unknown:
             raise ValueError(f"unsupported change_policy field: {sorted(unknown)[0]}")
         normalized = dict(policy)
-        if "kind" in normalized and normalized["kind"] not in {"full_content", "price", "availability"}:
-            raise ValueError("change_policy.kind must be full_content, price, or availability")
+        kind = normalized.get("kind")
+        if kind is not None and kind not in {"full_content", "price", "availability", "structured_field"}:
+            raise ValueError("change_policy.kind must be full_content, price, availability, or structured_field")
         for name in ("absolute_delta", "relative_delta_percent"):
             if name in normalized:
                 value = normalized[name]
@@ -383,10 +399,55 @@ class AgentWebEngine:
             normalized["required_state"] = state
         if "ignore_whitespace" in normalized and not isinstance(normalized["ignore_whitespace"], bool):
             raise ValueError("change_policy.ignore_whitespace must be boolean")
+        if kind == "structured_field":
+            field_path = normalized.get("field_path")
+            if not isinstance(field_path, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*(?:\.(?:[A-Za-z_][A-Za-z0-9_-]*|[0-9]+))*(?:\.[0-9]+)?", field_path.strip()):
+                raise ValueError("change_policy.field_path must be a dotted object/list path")
+            normalized["field_path"] = field_path.strip()
+            expected_type = str(normalized.get("expected_type", "string")).strip().lower()
+            if expected_type not in {"string", "entity", "price", "date"}:
+                raise ValueError("change_policy.expected_type must be string, entity, price, or date")
+            normalized["expected_type"] = expected_type
+            if "required_state" in normalized:
+                raise ValueError("change_policy.required_state is not supported for structured_field")
+            if expected_type != "price" and ("absolute_delta" in normalized or "relative_delta_percent" in normalized):
+                raise ValueError("structured_field numeric thresholds require expected_type price")
+        elif "field_path" in normalized or "expected_type" in normalized:
+            raise ValueError("field_path and expected_type require kind structured_field")
         return normalized or None
 
     @staticmethod
-    def _meaningful_change(task: str, previous: str | None, current: str, policy: dict | None = None) -> tuple[bool, str]:
+    def _field_value(data: object | None, field_path: str) -> object:
+        current = data
+        for segment in field_path.split("."):
+            if isinstance(current, dict) and segment in current:
+                current = current[segment]
+            elif isinstance(current, list) and segment.isdigit() and int(segment) < len(current):
+                current = current[int(segment)]
+            else:
+                return _MISSING_FIELD
+        return current
+
+    @staticmethod
+    def _structured_value(raw: object, expected_type: str, ignore_whitespace: bool) -> object:
+        if raw is _MISSING_FIELD:
+            return raw
+        if expected_type in {"price", "date", "entity"}:
+            normalized = normalize(raw, expected_type)
+            value = normalized.value if normalized.normalized else raw
+            return value.casefold() if expected_type == "entity" and isinstance(value, str) else value
+        value = str(raw)
+        return re.sub(r"\s+", " ", value).strip() if ignore_whitespace else value
+
+    @staticmethod
+    def _meaningful_change(
+        task: str,
+        previous: str | None,
+        current: str,
+        policy: dict | None = None,
+        previous_structured: object | None = None,
+        current_structured: object | None = None,
+    ) -> tuple[bool, str]:
         if previous is None:
             return False, "initial_snapshot"
         policy = policy or {}
@@ -394,6 +455,22 @@ class AgentWebEngine:
         kind = policy.get("kind")
         if kind is None:
             kind = "price" if any(term in lowered for term in ("price", "cost", "sale")) else "availability" if any(term in lowered for term in ("availability", "available", "stock", "sold out")) else "full_content"
+        if kind == "structured_field":
+            path = str(policy["field_path"])
+            expected_type = str(policy.get("expected_type", "string"))
+            before = AgentWebEngine._structured_value(AgentWebEngine._field_value(previous_structured, path), expected_type, bool(policy.get("ignore_whitespace")))
+            after = AgentWebEngine._structured_value(AgentWebEngine._field_value(current_structured, path), expected_type, bool(policy.get("ignore_whitespace")))
+            if before is _MISSING_FIELD or after is _MISSING_FIELD:
+                return before != after, "structured_field"
+            if expected_type == "price" and isinstance(before, (int, float)) and isinstance(after, (int, float)):
+                delta = abs(float(after) - float(before))
+                absolute = policy.get("absolute_delta")
+                relative = policy.get("relative_delta_percent")
+                if absolute is not None or relative is not None:
+                    absolute_hit = absolute is not None and delta > 0 and delta >= float(absolute)
+                    relative_hit = relative is not None and delta > 0 and (abs(float(before)) == 0 or delta / abs(float(before)) * 100 >= float(relative))
+                    return absolute_hit or relative_hit, "structured_field_threshold"
+            return before != after, "structured_field"
         if kind == "price":
             pattern = r"(?:₹|\$|€|£)\s?\d[\d,]*(?:\.\d+)?"
             parse_price = lambda value: [float(item.replace(",", "").replace("₹", "").replace("$", "").replace("€", "").replace("£", "").strip()) for item in re.findall(pattern, value)]
@@ -454,7 +531,9 @@ class AgentWebEngine:
             self.memory.record_usage(monitor.org_id, "monitor_checks")
             return monitor
         monitor.last_error = None
-        content = html_to_text(result.body)
+        parsed = parse(result.body.encode("utf-8"), result.content_type)
+        content = parsed.text or html_to_text(result.body)
+        structured_data = self._structured_projection(parsed, content)
         previous = self.memory.get_latest(monitor.target_url, monitor.org_id)
         snapshot_changed = self.memory.save_snapshot(
             key=monitor.target_url,
@@ -462,8 +541,16 @@ class AgentWebEngine:
             content=content,
             captured_at=now,
             org_id=monitor.org_id,
+            structured_data=structured_data,
         )
-        changed, change_policy_name = self._meaningful_change(monitor.task, previous["content"] if previous else None, content, monitor.change_policy)
+        changed, change_policy_name = self._meaningful_change(
+            monitor.task,
+            previous["content"] if previous else None,
+            content,
+            monitor.change_policy,
+            previous.get("structured_data") if previous else None,
+            structured_data,
+        )
         monitor.last_event = "change_detected" if changed else "no_change"
         if changed:
             monitor.last_change_at = now
