@@ -12,14 +12,18 @@
         "type": "object",
         "required": ["type"],
         "properties": {
-          "type": { "type": "string", "enum": ["click", "type", "wait_for", "scroll", "extract"] },
+          "type": { "type": "string", "enum": ["click", "type", "wait_for", "scroll", "extract", "fill_credential"] },
           "selector": { "type": "string" },
           "text": { "type": "string" },
           "attribute": { "type": "string" },
           "state": { "type": "string", "enum": ["attached", "detached", "visible", "hidden"] },
-          "amount": { "type": "integer" }
+          "amount": { "type": "integer" },
+          "field": { "type": "string", "enum": ["username", "secret"] },
+          "timeout_ms": { "type": "integer" }
         }
       }
-    }
+    },
+    "credential_id": { "type": "string", "description": "Opaque tenant-scoped browser credential ID; raw credentials are never accepted." },
+    "session_state_id": { "type": "string", "description": "Opaque tenant- and origin-bound encrypted browser session-state ID." }
   }
 }

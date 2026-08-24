@@ -8,6 +8,7 @@ from typing import Any
 from .skills import Skill, SkillRegistry, built_in_skill_registry
 
 _URL_RE = re.compile(r"https?://[^\s)\]>]+")
+_BROWSER_INTENT_RE = re.compile(r"\b(?:javascript|js-rendered|render|rendered|click|login|log\s+in|form|pagination|interact|browser)\b")
 
 
 @dataclass(frozen=True)
@@ -62,12 +63,17 @@ class Planner:
         return "focus"
 
     @staticmethod
-    def _generic_steps(task: str, mode: str) -> tuple[PlanStep, ...]:
+    def _requires_browser(task: str) -> bool:
+        return _BROWSER_INTENT_RE.search(task.lower()) is not None
+
+    @staticmethod
+    def _generic_steps(task: str, mode: str, inputs: dict[str, Any]) -> tuple[PlanStep, ...]:
         urls = list(dict.fromkeys(_URL_RE.findall(task)))
         max_sources = 5 if mode == "dive" else 3
         steps: list[PlanStep] = []
         if urls:
-            steps.append(PlanStep("extract", {"urls": urls[:max_sources], "max_sources": max_sources}))
+            step_type = "browser" if Planner._requires_browser(task) else "extract"
+            steps.append(PlanStep(step_type, {"urls": urls[:max_sources], "max_sources": max_sources, "inputs": dict(inputs)}))
         steps.extend(
             [
                 PlanStep("search", {"limit": 5 if mode in {"focus", "dive"} else 3}),
@@ -109,9 +115,11 @@ class Planner:
             for item in raw_steps:
                 if item["type"] == "extract" and task_urls:
                     item.setdefault("params", {})["urls"] = task_urls
+                    if Planner._requires_browser(task):
+                        item["type"] = "browser"
             steps = tuple(PlanStep(item["type"], dict(item.get("params", {}))) for item in raw_steps)
         else:
-            steps = self._generic_steps(task, estimated_mode)
+            steps = self._generic_steps(task, estimated_mode, inputs)
         return Plan(
             id="plan_" + uuid.uuid4().hex[:16],
             steps=steps,

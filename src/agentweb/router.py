@@ -27,17 +27,17 @@ class Router:
     _SUPPORTED = {"search", "crawl", "browser", "extract", "rank", "synthesize"}
 
     @staticmethod
-    def _extract_calls(params: dict[str, Any]) -> list[ToolCall]:
+    def _url_calls(tool: str, params: dict[str, Any]) -> list[ToolCall]:
         urls = params.get("urls")
         if not isinstance(urls, list) or not urls:
-            return [ToolCall("extract", dict(params))]
+            return [ToolCall(tool, dict(params))]
         calls: list[ToolCall] = []
         for url in urls[:5]:
             if isinstance(url, str) and url.strip():
                 item = dict(params)
                 item.pop("urls", None)
                 item["url"] = url.strip()
-                calls.append(ToolCall("extract", item))
+                calls.append(ToolCall(tool, item))
         return calls
 
     def route(self, plan: Plan) -> list[ToolCall]:
@@ -49,8 +49,8 @@ class Router:
                 raise ValueError(f"unsupported plan step: {step.type}")
             tool = self._ALIASES.get(step.type, step.type)
             params = dict(step.params)
-            if tool == "extract":
-                calls.extend(self._extract_calls(params))
+            if tool in {"extract", "browser"}:
+                calls.extend(self._url_calls(tool, params))
             else:
                 calls.append(ToolCall(tool, params))
         return calls

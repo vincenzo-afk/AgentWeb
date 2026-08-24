@@ -12,7 +12,7 @@ The router takes the planner's output and selects concrete execution paths: whic
 
 ## Current local implementation
 
-The local MVP exposes a deterministic `Router.route(plan)` contract returning serializable `ToolCall` objects. It expands bounded URL lists into individual extraction calls and maps the reusable aliases `search_each_item`, `extract_price_and_specs`, `rank_sources`, and `synthesize_comparison` to the corresponding local primitives. Unsupported step types fail closed with a validation error.
+The local MVP exposes a deterministic `Router.route(plan)` contract returning serializable `ToolCall` objects. It expands bounded URL lists into individual extraction or browser calls and maps the reusable aliases `search_each_item`, `extract_price_and_specs`, `rank_sources`, and `synthesize_comparison` to the corresponding local primitives. Browser calls preserve only the caller’s bounded action list and opaque `credential_id` or `session_state_id` references for the engine’s existing tenant/origin checks. Unsupported step types fail closed with a validation error.
 
 ## Design notes
 

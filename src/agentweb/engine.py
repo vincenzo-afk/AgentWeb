@@ -179,22 +179,51 @@ class AgentWebEngine:
             structured_data=structured_data,
         )
 
+    def _open_browser_session(
+        self,
+        url: str,
+        actions: list[dict] | None = None,
+        org_id: str = "development",
+        credential_id: str | None = None,
+        session_state_id: str | None = None,
+    ):
+        credential = None
+        if credential_id:
+            credential = self.credentials.resolve(org_id, credential_id)
+            if credential is None:
+                raise ValueError("browser credential not found")
+        storage_state = None
+        if session_state_id:
+            storage_state = self.session_states.resolve(org_id, session_state_id, url)
+            if storage_state is None:
+                raise ValueError("browser session state not found")
+        return self.browser.open(url, actions, credential, storage_state)
+
+    @classmethod
+    def _source_from_browser_session(cls, requested_url: str, session) -> Source | None:
+        text = (getattr(session, "text", "") or "").strip()
+        title = (getattr(session, "title", "") or "").strip()
+        if not text and not title:
+            return None
+        extracted = list(getattr(session, "extracted", []) or [])[:20]
+        structured_data = {"browser_extracted": extracted} if extracted else None
+        return Source(
+            id=cls._source_id(requested_url),
+            url=requested_url,
+            title=title,
+            snippet=text[:240],
+            trust_score=cls._trust_score(requested_url, title),
+            content_type="text/html",
+            extraction_confidence=round(0.90 if text else 0.60, 2),
+            structured_data=structured_data,
+        )
+
     def browser_open(self, url: str, actions: list[dict] | None = None, org_id: str = "development", credential_id: str | None = None, session_state_id: str | None = None):
         """Render a page through the isolated browser adapter and persist a trace."""
         started = time.time()
         execution_id = "exec_" + uuid.uuid4().hex[:16]
         try:
-            credential = None
-            if credential_id:
-                credential = self.credentials.resolve(org_id, credential_id)
-                if credential is None:
-                    raise ValueError("browser credential not found")
-            storage_state = None
-            if session_state_id:
-                storage_state = self.session_states.resolve(org_id, session_state_id, url)
-                if storage_state is None:
-                    raise ValueError("browser session state not found")
-            session = self.browser.open(url, actions, credential, storage_state)
+            session = self._open_browser_session(url, actions, org_id, credential_id, session_state_id)
             self.traces.save(
                 execution_id,
                 [self._span("browser", "open", started, session.status, redact_url(url), f"{len(session.actions)} action(s)")],
@@ -290,13 +319,12 @@ class AgentWebEngine:
         execution_id = self.traces.start()
         spans: list[Span] = []
         started = time.time()
-        requested_urls = list(
-            dict.fromkeys(
-                call.params.get("url")
-                for call in tool_calls
-                if call.tool == "extract" and isinstance(call.params.get("url"), str) and call.params.get("url")
-            )
-        )
+        retrieval_calls = [
+            (call.tool, call.params.get("url"), call.params)
+            for call in tool_calls
+            if call.tool in {"extract", "browser"} and isinstance(call.params.get("url"), str) and call.params.get("url")
+        ]
+        requested_urls = list(dict.fromkeys(url for _, url, _ in retrieval_calls))
         spans.append(
             self._span(
                 "planner",
@@ -310,31 +338,58 @@ class AgentWebEngine:
         source_candidates: list[Source] = []
         actions: list[dict[str, object]] = [{"tool": "router", "operation": "route", "status": "complete", "call_count": len(tool_calls)}]
         reuse_hits = 0
-        for url in requested_urls[:5 if mode == "dive" else 3]:
+        max_retrievals = 5 if mode == "dive" else 3
+        for tool, url, params in retrieval_calls[:max_retrievals]:
             fetch_started = time.time()
-            cached = self.memory.reusable_snapshot(url, org_id, self._reuse_window(task))
-            reuse_hits += int(cached is not None)
-            source = self._source_from_snapshot(cached) if cached else self._source_from_url(url, org_id)
-            spans.append(
-                self._span(
-                    "extractor",
-                    "reuse_snapshot" if cached else "fetch_and_parse",
-                    fetch_started,
-                    "reused" if cached and source else "complete" if source else "degraded",
-                    url,
-                    "fresh snapshot reused" if cached and source else "source accepted" if source else "source unavailable or blocked",
+            if tool == "browser":
+                interaction_inputs = params.get("inputs") if isinstance(params.get("inputs"), dict) else {}
+                browser_actions = params.get("actions", interaction_inputs.get("actions", []))
+                credential_id = params.get("credential_id", interaction_inputs.get("credential_id"))
+                session_state_id = params.get("session_state_id", interaction_inputs.get("session_state_id"))
+                try:
+                    session = self._open_browser_session(url, browser_actions, org_id, credential_id, session_state_id)
+                    source = self._source_from_browser_session(url, session)
+                    session_status = getattr(session, "status", "complete")
+                    spans.append(self._span("browser", "escalated_open", fetch_started, session_status, redact_url(url), f"{len(getattr(session, 'actions', []) or [])} action(s)"))
+                    actions.append(
+                        {
+                            "tool": "browser",
+                            "operation": "escalated_open",
+                            "status": session_status,
+                            "action_count": len(getattr(session, "actions", []) or []),
+                            "source_id": source.id if source else None,
+                        }
+                    )
+                except Exception as error:
+                    source = None
+                    spans.append(self._span("browser", "escalated_open", fetch_started, "failed", redact_url(url), redact_text(str(error))))
+                    actions.append({"tool": "browser", "operation": "escalated_open", "status": "failed"})
+                    if credential_id or session_state_id:
+                        raise
+            else:
+                cached = self.memory.reusable_snapshot(url, org_id, self._reuse_window(task))
+                reuse_hits += int(cached is not None)
+                source = self._source_from_snapshot(cached) if cached else self._source_from_url(url, org_id)
+                spans.append(
+                    self._span(
+                        "extractor",
+                        "reuse_snapshot" if cached else "fetch_and_parse",
+                        fetch_started,
+                        "reused" if cached and source else "complete" if source else "degraded",
+                        url,
+                        "fresh snapshot reused" if cached and source else "source accepted" if source else "source unavailable or blocked",
+                    )
                 )
-            )
+                actions.append(
+                    {
+                        "tool": "memory" if cached else "extractor",
+                        "operation": "reuse_snapshot" if cached else "fetch_and_parse",
+                        "status": "reused" if cached and source else "complete" if source else "degraded",
+                        "source_id": source.id if source else None,
+                    }
+                )
             if source:
                 source_candidates.append(source)
-            actions.append(
-                {
-                    "tool": "memory" if cached else "extractor",
-                    "operation": "reuse_snapshot" if cached else "fetch_and_parse",
-                    "status": "reused" if cached and source else "complete" if source else "degraded",
-                    "source_id": source.id if source else None,
-                }
-            )
 
         if not source_candidates and any(call.tool == "search" for call in tool_calls):
             search_started = time.time()

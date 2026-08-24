@@ -21,7 +21,7 @@ A **plan**: an ordered set of serializable `PlanStep` objects to hand to the [Ro
 
 ## Current local implementation
 
-The local MVP provides deterministic `Planner`, `Plan`, and `PlanStep` objects. Built-in matching currently covers comparison, current price/availability lookup, and source-summary tasks. An explicitly named unknown skill fails closed with a validation error; an unmatched task falls back to a conservative focus-style search, extraction, ranking, and synthesis plan.
+The local MVP provides deterministic `Planner`, `Plan`, and `PlanStep` objects. Built-in matching currently covers comparison, current price/availability lookup, and source-summary tasks. An explicitly named unknown skill fails closed with a validation error; an unmatched task falls back to a conservative focus-style search, extraction, ranking, and synthesis plan. When a task includes an absolute URL and explicitly requests rendering or interaction, the planner changes the bounded URL step to `browser`; ordinary tasks continue to prefer static extraction.
 
 ## Learning loop
 

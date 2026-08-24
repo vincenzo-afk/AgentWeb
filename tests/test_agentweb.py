@@ -300,6 +300,36 @@ class AgentWebTests(unittest.TestCase):
         ]
         self.assertEqual(rank(sources, "research task")[0].source.id, "b")
 
+    def test_planner_escalates_explicit_rendering_requests_to_browser(self):
+        from agentweb.planner import Planner
+
+        plan = Planner().plan(f"Render and summarize {self.url}")
+        self.assertEqual(plan.skill, "source_summary")
+        self.assertEqual(plan.steps[0].type, "browser")
+        self.assertEqual(plan.steps[0].params["urls"], [self.url])
+        ordinary = Planner().plan(f"Find information about {self.url}")
+        self.assertEqual(ordinary.steps[0].type, "extract")
+
+    def test_solve_escalates_rendering_request_and_reports_browser_action(self):
+        os.environ["AGENTWEB_CHROMIUM_PATH"] = "/usr/bin/chromium"
+        response = self.engine.solve(
+            f"Render and summarize {self.url}",
+            inputs={"actions": [{"type": "wait_for", "selector": "h1"}, {"type": "extract", "selector": "h1"}]},
+        )
+        self.assertEqual(response.plan["steps"][0]["type"], "browser")
+        self.assertIn("browser", response.plan["routed_tools"])
+        browser_actions = [action for action in response.actions if action["tool"] == "browser"]
+        self.assertEqual(len(browser_actions), 1)
+        self.assertEqual(browser_actions[0]["status"], "complete")
+        self.assertGreaterEqual(browser_actions[0]["action_count"], 2)
+        self.assertIn("Hello", response.sources[0].snippet)
+        trace = self.engine.traces.get(response.execution_id)
+        self.assertTrue(any(span["component"] == "browser" and span["operation"] == "escalated_open" for span in trace["spans"]))
+
+    def test_solve_browser_escalation_rejects_invalid_session_state_reference(self):
+        with self.assertRaisesRegex(ValueError, "browser session state not found"):
+            self.engine.solve(f"Render and summarize {self.url}", inputs={"session_state_id": "bstate_missing"})
+
     def test_planner_matches_skills_and_estimates_modes(self):
         from agentweb.planner import Planner
 
@@ -336,6 +366,16 @@ class AgentWebTests(unittest.TestCase):
         )
         calls = Router().route(plan)
         self.assertEqual([call.tool for call in calls], ["search", "extract", "extract", "extract", "rank", "synthesize"])
+        browser_plan = Plan(
+            id="plan_browser",
+            steps=(PlanStep("browser", {"urls": ["https://one.example", "https://two.example"], "inputs": {"session_state_id": "bstate_safe"}, "actions": [{"type": "wait_for", "selector": "h1"}]}),),
+            estimated_mode="focus",
+            intent="lookup",
+        )
+        browser_calls = Router().route(browser_plan)
+        self.assertEqual([call.tool for call in browser_calls], ["browser", "browser"])
+        self.assertEqual(browser_calls[0].params["inputs"], {"session_state_id": "bstate_safe"})
+        self.assertEqual(browser_calls[0].params["actions"], [{"type": "wait_for", "selector": "h1"}])
         self.assertEqual([call.params["url"] for call in calls[1:4]], ["https://one.example", "https://two.example", "https://three.example"])
         self.assertEqual(calls[0].params["limit"], 5)
         with self.assertRaisesRegex(ValueError, "unsupported plan step"):

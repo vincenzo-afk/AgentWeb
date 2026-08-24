@@ -2,6 +2,24 @@
 
 For pages requiring interaction — logins, multi-step forms, JS-rendered content — use the [browser primitive](../api/reference/browser.md) directly, or let the [Router](../core/router.md) escalate to it automatically within `internet.solve()`.
 
+## Automatic escalation through solve
+
+For an absolute URL, explicit rendering or interaction wording routes the URL through the isolated browser engine while ordinary direct-URL summaries continue to use static extraction:
+
+```json
+{
+  "task": "Render and summarize https://example.com/product/123",
+  "inputs": {
+    "actions": [
+      { "type": "wait_for", "selector": ".price" },
+      { "type": "extract", "selector": ".price" }
+    ]
+  }
+}
+```
+
+The solve response records the browser stage in its bounded `actions` summary. If `inputs` includes `credential_id` or `session_state_id`, only the opaque reference is forwarded; the engine resolves it with the same tenant and origin checks as the direct browser endpoint. Invalid references fail closed.
+
 ## Direct control example
 
 ```js
