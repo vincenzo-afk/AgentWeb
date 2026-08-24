@@ -28,5 +28,5 @@ await internet.solve({ skill: "compare-products", inputs: { items: ["A", "B", "C
 
 - Keep skills narrow and composable rather than trying to cover every variant of a task in one skill.
 - Skill templates contain generic metadata and bounded steps only; organization-specific task content is supplied at planning time and is not persisted in the registry.
-- The skill registry is available through `/solve` and through the authenticated `/plan` → approval → `/execute` workflow. Plan records are tenant-scoped, expiring, and do not persist task content; the learning loop remains deferred roadmap work.
+- The skill registry is available through `/solve` and through the authenticated `/plan` → approval → `/execute` workflow. Plan records are tenant-scoped, expiring, and do not persist task content. Reviewed organization-scoped skill plugins can supply bounded templates when built-in matching is insufficient; see [Building Plugins](plugins.md). Solve outcomes persist only privacy-safe strategy, mode, evidence, success, execution, and latency signals for aggregate evaluation.
 - Skills that perform well (fast, well-cited, low-cost) for a task class are strong candidates for promotion into the platform's built-in skill library. See [research/economic-model.md](../research/economic-model.md) for why this matters strategically.

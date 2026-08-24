@@ -42,4 +42,4 @@ GET /v1/workflows/runs?limit=50
 
 Runs are stored with `queued`, `running`, `succeeded`, or `failed` status. The run record contains the opaque solve execution ID when available and a bounded error string on failure. Raw page content, credentials, and rendered task inputs are not included in run records. Queue jobs use the existing scheduler lease, retry, rate-limit, and dead-letter behavior.
 
-The current worker is local-first and supervised through `agentweb --worker`; the same queue contract can be backed by the explicitly enabled distributed coordinator. Richer event sources, operator controls, and external workflow integrations remain future deployment work.
+The current worker is local-first and supervised through `agentweb --worker`; the same queue contract can be backed by the explicitly enabled distributed coordinator. Pause and resume are available through the authenticated workflow controls. Richer event sources, external workflow integrations, and production load evaluation remain future deployment work.

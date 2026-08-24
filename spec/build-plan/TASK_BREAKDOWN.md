@@ -36,4 +36,4 @@
 - [x] Organization-scoped metrics endpoint and response rate-limit headers
 - [x] Organization-scoped data deletion endpoint
 
-See [../testing/ACCEPTANCE_CRITERIA.md](../testing/ACCEPTANCE_CRITERIA.md) for what "done" means per task. Graph, planner/execute, and workflow automation remain roadmap-deferred; PostgreSQL runtime cutover, browser credential flows, and production staging gates remain open readiness work.
+See [../testing/ACCEPTANCE_CRITERIA.md](../testing/ACCEPTANCE_CRITERIA.md) for what "done" means per task. Graph storage/query, planner/execute, workflow automation, vector retrieval, privacy-safe learning persistence, and bounded organization-scoped plugins are implemented slices. PostgreSQL runtime cutover, browser credential flows, calibrated evaluation, and production staging gates remain open readiness work.
