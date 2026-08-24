@@ -21,6 +21,18 @@ Idempotency-Key: workflow-setup-001
 Workflow definitions are tenant-scoped and require `workflow:manage`. Supported events are `monitor.change_detected` and `monitor.no_change`; the default is `monitor.change_detected`. Monitor checks now emit both events to matching workflows, while webhook delivery remains change-only.
  The task template is bounded to 2,000 characters and supports `{event}`, `{monitor_id}`, `{target}`, `{from_hash}`, `{to_hash}`, and `{timestamp}`.
 
+## Pause and resume
+
+```http
+POST /v1/workflows/pause
+Content-Type: application/json
+Idempotency-Key: workflow-pause-001
+
+{"workflow_id": "wf_123"}
+```
+
+Use `POST /v1/workflows/resume` with the same payload to reactivate a paused definition. Paused workflows retain their definitions and historical runs but do not create new jobs for matching monitor events. Both controls require `workflow:manage` and are idempotent when an `Idempotency-Key` is supplied.
+
 ## Inspect definitions and runs
 
 ```http

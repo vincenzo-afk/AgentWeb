@@ -125,6 +125,14 @@ class WorkflowStoreTests(unittest.TestCase):
         self.assertEqual(queued.list_runs("org_a")[0]["status"], "succeeded")
         self.assertEqual(self.executions[-1][0], "Summarize https://example.com")
 
+    def test_workflow_can_be_paused_and_resumed(self) -> None:
+        workflow = self.store.create("Controlled", self.monitor.id, "Summarize {target}", org_id="org_a")
+        paused = self.store.set_status(workflow["id"], "paused", "org_a")
+        self.assertEqual(paused["status"], "paused")
+        resumed = self.store.set_status(workflow["id"], "active", "org_a")
+        self.assertEqual(resumed["status"], "active")
+        self.assertEqual(self.store.list("org_b"), [])
+
     def test_template_errors_are_recorded_without_raising(self) -> None:
         self.store.create("Broken", self.monitor.id, "Use {missing}", org_id="org_a")
         runs = self.store.trigger_for_monitor(self.monitor.id, "org_a", "monitor.change_detected", {})

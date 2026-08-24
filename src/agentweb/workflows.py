@@ -136,6 +136,21 @@ class WorkflowStore:
                 raise RuntimeError("workflow creation failed")
             return self._workflow(row)
 
+    def set_status(self, workflow_id: str, status: str, org_id: str = "development") -> dict[str, Any]:
+        if status not in {"active", "paused"}:
+            raise ValueError("workflow status must be active or paused")
+        with self._connect() as connection:
+            updated = connection.execute(
+                "UPDATE workflows SET status=?, updated_at=? WHERE id=? AND org_id=?",
+                (status, time.time(), workflow_id, org_id),
+            ).rowcount
+            if not updated:
+                raise ValueError("workflow not found")
+            row = connection.execute("SELECT * FROM workflows WHERE id=? AND org_id=?", (workflow_id, org_id)).fetchone()
+        if row is None:
+            raise ValueError("workflow not found")
+        return self._workflow(row)
+
     def list(self, org_id: str = "development") -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(

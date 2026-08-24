@@ -569,7 +569,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
         request_hash = None
         try:
             payload = self._read_json()
-            if path in {"/solve", "/execute", "/observe", "/crawl", "/graph/entities", "/graph/relations", "/workflows", "/learning/outcomes", "/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states"}:
+            if path in {"/solve", "/execute", "/observe", "/crawl", "/graph/entities", "/graph/relations", "/workflows", "/learning/outcomes"} or path in {"/workflows/pause", "/workflows/resume"} or path.startswith(("/admin/keys", "/admin/browser-credentials", "/admin/browser-session-states")):
                 idempotency_key, request_hash = self._begin_idempotency(principal, self._idempotency_key(payload), payload)
                 if idempotency_key and request_hash is None:
                     return
@@ -645,6 +645,9 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     execution_id=payload.get("execution_id"),
                     latency_ms=payload.get("latency_ms"),
                 )
+            elif path in {"/workflows/pause", "/workflows/resume"}:
+                workflow_id = str(payload.get("workflow_id", "")).strip()
+                response_payload = self.engine.workflows.set_status(workflow_id, "paused" if path.endswith("/pause") else "active", principal.org_id)
             elif path == "/workflows":
                 response_status = HTTPStatus.CREATED
                 response_payload = self.engine.workflows.create(

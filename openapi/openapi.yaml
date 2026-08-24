@@ -524,6 +524,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Workflow'
+  /workflows/pause:
+    post:
+      summary: Pause a workflow definition
+      operationId: pauseWorkflow
+      security:
+        - bearerAuth: [workflow:manage]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowControlInput'
+      responses:
+        '200':
+          description: Paused workflow definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+  /workflows/resume:
+    post:
+      summary: Resume a workflow definition
+      operationId: resumeWorkflow
+      security:
+        - bearerAuth: [workflow:manage]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowControlInput'
+      responses:
+        '200':
+          description: Resumed workflow definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
   /workflows/runs:
     get:
       summary: List workflow execution runs
@@ -979,6 +1021,11 @@ components:
           type: string
           enum: [flash, focus, dive]
           default: focus
+    WorkflowControlInput:
+      type: object
+      required: [workflow_id]
+      properties:
+        workflow_id: { type: string, minLength: 1, maxLength: 200 }
     Workflow:
       type: object
       required: [id, name, monitor_id, event, task_template, mode, status]

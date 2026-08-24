@@ -45,7 +45,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Learning loop | Every solve records redacted strategy, mode, success, evidence, execution ID, and latency signals; `GET /learning/summary` exposes tenant-scoped aggregates and `POST /learning/outcomes` accepts bounded evaluator feedback without raw task content. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys and browser credentials/session states, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
 | Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; extraction and monitor checks automatically add page/mention provenance; `GET /graph/query` supports entity, relation, related-node, bounded depth filters, and opaque cursor pagination. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
-| Event-driven workflows | `POST /workflows` registers an organization-scoped task template for monitor `change_detected` or `no_change` events; matching events create durable `workflow_run` jobs, the supervised worker renders the template and executes a grounded solve, and redacted run records are available through `GET /workflows/runs`. Queue leases, retries, rate limits, and dead-letter behavior reuse the scheduler. |
+| Event-driven workflows | `POST /workflows` registers an organization-scoped task template for monitor `change_detected` or `no_change` events; matching events create durable `workflow_run` jobs, the supervised worker renders the template and executes a grounded solve, and redacted run records are available through `GET /workflows/runs`. Queue leases, retries, rate limits, and dead-letter behavior reuse the scheduler. `POST /workflows/pause` and `/workflows/resume` provide idempotent operator controls. |
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
 
@@ -182,6 +182,8 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `POST` | `/graph/entities` | Create or merge a graph entity; requires `graph:write` and supports `Idempotency-Key`. |
 | `POST` | `/graph/relations` | Create or corroborate a graph relation; requires `graph:write` and supports `Idempotency-Key`. |
 | `GET` | `/workflows` | List organization-scoped event-driven workflow definitions; requires `workflow:manage`. |
+| `POST` | `/workflows/pause` | Pause a workflow by `workflow_id` without deleting definitions or historical runs; requires `workflow:manage`. |
+| `POST` | `/workflows/resume` | Resume a paused workflow by `workflow_id`; requires `workflow:manage`. |
 | `POST` | `/workflows` | Register a monitor event workflow with a bounded task template; requires `workflow:manage` and supports `Idempotency-Key`. |
 | `GET` | `/workflows/runs` | List organization-scoped workflow execution records; requires `workflow:manage`. |
 | `GET` | `/learning/summary` | List tenant-scoped strategy and mode outcome aggregates; requires `learning:read`. |
