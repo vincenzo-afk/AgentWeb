@@ -342,7 +342,7 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, {**crawl, "pages": pages, "data": pages}, request_id)
                 return
             if path == "/graph/query":
-                limit, _ = _page_window(query)
+                limit, offset = _page_window(query)
                 try:
                     depth = int(query.get("depth", ["1"])[0])
                 except (TypeError, ValueError):
@@ -356,8 +356,11 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     org_id=principal.org_id,
                     limit=limit,
                     depth=depth,
+                    cursor=offset,
                 )
-                self._send_json(HTTPStatus.OK, self._decorate_success_payload(graph_result.to_dict(), request_id), request_id)
+                graph_payload = graph_result.to_dict()
+                graph_payload["next_cursor"] = _encode_cursor(offset + limit) if graph_result.has_more else None
+                self._send_json(HTTPStatus.OK, self._decorate_success_payload(graph_payload, request_id), request_id)
                 return
             if path == "/learning/summary":
                 summaries = self.engine.learning.summary(principal.org_id, _page_window(query)[0])

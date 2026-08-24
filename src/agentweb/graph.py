@@ -108,11 +108,13 @@ class Relation:
 class GraphResult:
     nodes: list[Entity]
     edges: list[Relation]
+    has_more: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "nodes": [node.to_dict() for node in self.nodes],
             "edges": [edge.to_dict() for edge in self.edges],
+            "has_more": self.has_more,
         }
 
 
@@ -354,9 +356,11 @@ class GraphStore:
         org_id: str = "development",
         limit: int = 100,
         depth: int = 1,
+        cursor: int = 0,
     ) -> GraphResult:
         bounded_limit = max(1, min(int(limit), 100))
         bounded_depth = max(1, min(int(depth), 3))
+        bounded_cursor = max(0, int(cursor))
         with self._connect() as connection:
             all_rows = connection.execute(
                 "SELECT r.*, from_node.entity_type AS from_type, to_node.entity_type AS to_type "
@@ -395,14 +399,16 @@ class GraphStore:
                         next_frontier.update({row["from_id"], row["to_id"]} - visited)
                     visited.update(next_frontier)
                     frontier = next_frontier
-                    if len(selected) >= bounded_limit:
+                    if len(selected) >= bounded_cursor + bounded_limit + 1:
                         break
-                edge_rows = selected[:bounded_limit]
+                edge_candidates = selected
             else:
-                edge_rows = [
+                edge_candidates = [
                     row for row in all_rows
                     if allowed(row) and (not entity_type or row["from_type"] == entity_type or row["to_type"] == entity_type)
-                ][:bounded_limit]
+                ]
+            has_more = len(edge_candidates) > bounded_cursor + bounded_limit
+            edge_rows = edge_candidates[bounded_cursor : bounded_cursor + bounded_limit]
 
             entity_ids = {row["from_id"] for row in edge_rows} | {row["to_id"] for row in edge_rows}
             entity_clauses = ["org_id=?"]
@@ -418,14 +424,14 @@ class GraphStore:
                 entity_clauses.append("id=?")
                 entity_params.append(anchor_id)
             entity_rows = connection.execute(
-                "SELECT * FROM graph_entities WHERE " + " AND ".join(entity_clauses) + " ORDER BY name COLLATE NOCASE, id LIMIT ?",
-                (*entity_params, bounded_limit),
+                "SELECT * FROM graph_entities WHERE " + " AND ".join(entity_clauses) + " ORDER BY name COLLATE NOCASE, id LIMIT ? OFFSET ?",
+                (*entity_params, bounded_limit, bounded_cursor),
             ).fetchall()
         edges = []
         for row in edge_rows:
             relation_item = self._relation(row)
             edges.append(Relation(**{**relation_item.__dict__, "confidence": self._query_confidence(row)}))
-        return GraphResult(nodes=[self._entity(row) for row in entity_rows], edges=edges)
+        return GraphResult(nodes=[self._entity(row) for row in entity_rows], edges=edges, has_more=has_more)
 
     def health(self) -> bool:
         try:

@@ -44,7 +44,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Vector retrieval | `VectorStore` provides deterministic hashed-token embeddings, persistent nearest-neighbor search, separate `skills` and `entities:<org_id>` namespaces, semantic skill fallback matching, and cautious graph entity resolution. |
 | Learning loop | Every solve records redacted strategy, mode, success, evidence, execution ID, and latency signals; `GET /learning/summary` exposes tenant-scoped aggregates and `POST /learning/outcomes` accepts bounded evaluator feedback without raw task content. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys and browser credentials/session states, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
-| Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; extraction and monitor checks automatically add page/mention provenance; `GET /graph/query` supports entity, relation, related-node, and bounded depth filters. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
+| Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; extraction and monitor checks automatically add page/mention provenance; `GET /graph/query` supports entity, relation, related-node, bounded depth filters, and opaque cursor pagination. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
 | Event-driven workflows | `POST /workflows` registers an organization-scoped task template for monitor change events; matching changes render the template, execute a grounded solve, and persist a redacted run record available through `GET /workflows/runs`. |
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
@@ -178,7 +178,7 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `DELETE` | `/admin/browser-session-states/{id}` | Revoke encrypted browser session state; requires `admin:*`. |
 | `GET` | `/memory/{target}` | List immutable snapshots for a target. |
 | `GET` | `/memory/{target}/diff` | Compare two stored snapshots using `from` and `to` hashes. |
-| `GET` | `/graph/query` | Query tenant-scoped graph nodes and edges using optional `entity_type`, `related_to`, `relation`, and `limit` filters; requires `graph:read`. |
+| `GET` | `/graph/query` | Query tenant-scoped graph nodes and edges using optional `entity_type`, `related_to`, `relation`, `depth`, `limit`, and opaque `cursor` filters; requires `graph:read`. |
 | `POST` | `/graph/entities` | Create or merge a graph entity; requires `graph:write` and supports `Idempotency-Key`. |
 | `POST` | `/graph/relations` | Create or corroborate a graph relation; requires `graph:write` and supports `Idempotency-Key`. |
 | `GET` | `/workflows` | List organization-scoped event-driven workflow definitions; requires `workflow:manage`. |

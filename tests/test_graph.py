@@ -165,6 +165,23 @@ class GraphApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["type"], "invalid_request")
 
+    def test_graph_query_supports_cursor_pagination(self) -> None:
+        entities = []
+        for name in ("A", "B", "C", "D"):
+            status, entity, _ = self.request("POST", "/v1/graph/entities", {"type": "Node", "name": name})
+            self.assertEqual(status, 201)
+            entities.append(entity["id"])
+        for left, right in zip(entities, entities[1:]):
+            status, _, _ = self.request("POST", "/v1/graph/relations", {"from_id": left, "to_id": right, "relation": "links"})
+            self.assertEqual(status, 201)
+        status, first, _ = self.request("GET", "/v1/graph/query?limit=1")
+        self.assertEqual(status, 200)
+        self.assertTrue(first["has_more"])
+        self.assertIsNotNone(first["next_cursor"])
+        status, second, _ = self.request("GET", "/v1/graph/query?limit=1&cursor=" + first["next_cursor"])
+        self.assertEqual(status, 200)
+        self.assertNotEqual(first["edges"][0]["id"], second["edges"][0]["id"])
+
     def test_graph_depth_is_bounded(self) -> None:
         status, payload, _ = self.request("GET", "/v1/graph/query?depth=4")
         self.assertEqual(status, 400)

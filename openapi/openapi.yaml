@@ -402,9 +402,10 @@ paths:
             maximum: 3
             default: 1
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
-          description: Matching graph nodes and corroboration-aware edges
+          description: Matching graph nodes and corroboration-aware edges with cursor pagination
           content:
             application/json:
               schema:
