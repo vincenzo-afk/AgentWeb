@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +14,7 @@ from agentweb.api import create_server
 from agentweb.engine import AgentWebEngine
 from agentweb.graph import GraphStore
 from agentweb.memory import MemoryStore
+from agentweb.scheduler import Scheduler
 from agentweb.models import Monitor
 from agentweb.workflows import WorkflowStore
 
@@ -107,6 +109,21 @@ class WorkflowStoreTests(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "succeeded")
         self.assertEqual(runs[0]["execution_id"], "exec_workflow")
         self.assertEqual(self.store.list_runs("org_b"), [])
+
+    def test_trigger_queues_and_scheduler_executes_run(self) -> None:
+        queued = WorkflowStore(self.memory.path, self.store.executor, self.memory.enqueue_workflow_run)
+        queued.create("Queued summary", self.monitor.id, "Summarize {target}", org_id="org_a")
+        runs = queued.trigger_for_monitor(self.monitor.id, "org_a", "monitor.change_detected", {"target": "https://example.com"})
+        self.assertEqual(runs[0]["status"], "queued")
+        scheduler = Scheduler(self.memory, lambda monitor: monitor, workflow_runner=queued.execute_queued_run)
+        result = None
+        for _ in range(3):
+            result = scheduler.run_once(now=time.time() + 1)
+            if result and result.get("result", {}).get("run_id"):
+                break
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(queued.list_runs("org_a")[0]["status"], "succeeded")
+        self.assertEqual(self.executions[-1][0], "Summarize https://example.com")
 
     def test_template_errors_are_recorded_without_raising(self) -> None:
         self.store.create("Broken", self.monitor.id, "Use {missing}", org_id="org_a")

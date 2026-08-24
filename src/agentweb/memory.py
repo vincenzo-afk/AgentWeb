@@ -637,6 +637,27 @@ class MemoryStore:
             )
         return state_id
 
+    def enqueue_workflow_run(
+        self,
+        org_id: str,
+        run_id: str,
+        workflow_id: str,
+        values: dict[str, Any],
+        run_at: float | None = None,
+        job_id: str | None = None,
+    ) -> str:
+        if not isinstance(values, dict):
+            raise ValueError("workflow values must be an object")
+        now = time.time() if run_at is None else float(run_at)
+        job_id = job_id or ("job_" + uuid.uuid4().hex[:16])
+        payload = json.dumps({"run_id": run_id, "workflow_id": workflow_id, "values": values}, separators=(",", ":"), ensure_ascii=False)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO scheduler_jobs(id, org_id, job_type, monitor_id, priority, status, run_at, lease_until, attempts, max_attempts, last_error, created_at, updated_at, payload_json) VALUES(?, ?, 'workflow_run', NULL, 4, 'pending', ?, NULL, 0, 3, NULL, ?, ?, ?)",
+                (job_id, org_id, now, now, now, payload),
+            )
+        return job_id
+
     def enqueue_webhook_delivery(
         self,
         org_id: str,

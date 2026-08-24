@@ -1,6 +1,6 @@
 # Event-driven workflows
 
-AgentWeb can execute a bounded grounded-research task when a meaningful monitor event occurs. This is an opt-in trigger beyond webhook delivery: the workflow renders a user-supplied task template, calls the normal `/solve` path, and records the resulting execution ID or failure status.
+AgentWeb can execute a bounded grounded-research task when a meaningful monitor event occurs. This is an opt-in trigger beyond webhook delivery: the workflow records a durable `workflow_run` queue job, the supervised worker renders the user-supplied task template, calls the normal `/solve` path, and records the resulting execution ID or failure status.
 
 ## Register a workflow
 
@@ -27,6 +27,6 @@ GET /v1/workflows?limit=50
 GET /v1/workflows/runs?limit=50
 ```
 
-Runs are stored with `running`, `succeeded`, or `failed` status. The run record contains the opaque solve execution ID when available and a bounded error string on failure. Raw page content, credentials, and rendered task inputs are not included in run records.
+Runs are stored with `queued`, `running`, `succeeded`, or `failed` status. The run record contains the opaque solve execution ID when available and a bounded error string on failure. Raw page content, credentials, and rendered task inputs are not included in run records. Queue jobs use the existing scheduler lease, retry, rate-limit, and dead-letter behavior.
 
-Workflow execution is currently synchronous at the monitor-check boundary and uses the existing local solve implementation. Queued/distributed workers, richer event sources, operator controls, and external workflow integrations remain future deployment work.
+The current worker is local-first and supervised through `agentweb --worker`; the same queue contract can be backed by the explicitly enabled distributed coordinator. Richer event sources, operator controls, and external workflow integrations remain future deployment work.

@@ -53,7 +53,7 @@ class AgentWebEngine:
     ) -> None:
         self.memory = memory or MemoryStore()
         self.graph = GraphStore(self.memory.path)
-        self.workflows = WorkflowStore(self.memory.path, self._run_workflow)
+        self.workflows = WorkflowStore(self.memory.path, self._run_workflow, self.memory.enqueue_workflow_run)
         self.learning = LearningStore(self.memory.path)
         self.queue_coordinator = queue_coordinator
         metric_backend = (
@@ -77,7 +77,7 @@ class AgentWebEngine:
         )
         self.crawler = Crawler(self.trust_engine, memory=self.memory, coordinator=queue_coordinator)
         self.browser = BrowserEngine(self.trust_engine)
-        self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook, retention_runner=self.run_retention, coordinator=queue_coordinator)
+        self.scheduler = Scheduler(self.memory, self.check_monitor, webhook_sender=self._deliver_webhook, retention_runner=self.run_retention, workflow_runner=self.workflows.execute_queued_run, coordinator=queue_coordinator)
 
     @staticmethod
     def _trust_score(url: str, title: str = "") -> float:

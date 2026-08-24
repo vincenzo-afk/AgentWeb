@@ -17,10 +17,11 @@ class WorkflowStore:
     EVENTS = {"monitor.change_detected", "monitor.no_change"}
     MODES = {"flash", "focus", "dive"}
 
-    def __init__(self, path: str | Path, executor: Callable[[str, str, str], Any]) -> None:
+    def __init__(self, path: str | Path, executor: Callable[[str, str, str], Any], enqueue: Callable[[str, str, str, dict[str, Any]], str] | None = None) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.executor = executor
+        self.enqueue = enqueue
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -174,6 +175,26 @@ class WorkflowStore:
                     "INSERT INTO workflow_runs (id, workflow_id, org_id, monitor_id, event, status, created_at) VALUES (?, ?, ?, ?, ?, 'running', ?)",
                     (run_id, workflow["id"], org_id, monitor_id, event, started),
                 )
+            if self.enqueue is not None:
+                try:
+                    self.enqueue(org_id, run_id, workflow["id"], values)
+                    with self._connect() as connection:
+                        connection.execute("UPDATE workflow_runs SET status='queued' WHERE id=? AND org_id=?", (run_id, org_id))
+                        row = connection.execute("SELECT * FROM workflow_runs WHERE id=? AND org_id=?", (run_id, org_id)).fetchone()
+                    if row is not None:
+                        runs.append(self._run(row))
+                    continue
+                except Exception as exc:  # noqa: BLE001 - queue failures are persisted for operators
+                    status = "failed"
+                    execution_id = None
+                    error = str(exc)[:500]
+                    completed = time.time()
+                    with self._connect() as connection:
+                        connection.execute("UPDATE workflow_runs SET status=?, error=?, completed_at=? WHERE id=? AND org_id=?", (status, error, completed, run_id, org_id))
+                        row = connection.execute("SELECT * FROM workflow_runs WHERE id=? AND org_id=?", (run_id, org_id)).fetchone()
+                    if row is not None:
+                        runs.append(self._run(row))
+                    continue
             status = "succeeded"
             execution_id = None
             error = None
@@ -198,6 +219,41 @@ class WorkflowStore:
             if row is not None:
                 runs.append(self._run(row))
         return runs
+
+    def execute_queued_run(self, payload: dict[str, Any], org_id: str) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("workflow job payload must be an object")
+        run_id = str(payload.get("run_id") or "").strip()
+        workflow_id = str(payload.get("workflow_id") or "").strip()
+        values = payload.get("values", {})
+        if not run_id or not workflow_id or not isinstance(values, dict):
+            raise ValueError("workflow job payload is invalid")
+        with self._connect() as connection:
+            workflow = connection.execute("SELECT * FROM workflows WHERE id=? AND org_id=? AND status='active'", (workflow_id, org_id)).fetchone()
+            run = connection.execute("SELECT * FROM workflow_runs WHERE id=? AND workflow_id=? AND org_id=?", (run_id, workflow_id, org_id)).fetchone()
+            if workflow is None or run is None:
+                raise ValueError("workflow or run not found")
+            connection.execute("UPDATE workflow_runs SET status='running', error=NULL WHERE id=? AND org_id=?", (run_id, org_id))
+        try:
+            task = workflow["task_template"].format_map({key: str(value) for key, value in values.items()})
+            if not task.strip() or len(task) > 2000:
+                raise ValueError("rendered workflow task must contain between 1 and 2000 characters")
+            result = self.executor(task, workflow["mode"], org_id)
+            execution_id = getattr(result, "execution_id", None)
+            if execution_id is None and isinstance(result, dict):
+                execution_id = result.get("execution_id")
+            status = "succeeded"
+            error = None
+        except Exception as exc:  # noqa: BLE001 - scheduler owns retry semantics
+            execution_id = None
+            status = "failed"
+            error = str(exc)[:500]
+            with self._connect() as connection:
+                connection.execute("UPDATE workflow_runs SET status=?, error=?, completed_at=? WHERE id=? AND org_id=?", (status, error, time.time(), run_id, org_id))
+            raise
+        with self._connect() as connection:
+            connection.execute("UPDATE workflow_runs SET status=?, execution_id=?, error=?, completed_at=? WHERE id=? AND org_id=?", (status, execution_id, error, time.time(), run_id, org_id))
+        return {"run_id": run_id, "status": status, "execution_id": execution_id}
 
     def health(self) -> bool:
         try:

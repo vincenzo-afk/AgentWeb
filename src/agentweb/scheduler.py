@@ -23,6 +23,7 @@ class Scheduler:
         *,
         webhook_sender: Callable[[dict[str, Any]], Any] | None = None,
         retention_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        workflow_runner: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
         lease_seconds: float = 120.0,
         poll_seconds: float = 1.0,
         coordinator: Any | None = None,
@@ -31,6 +32,7 @@ class Scheduler:
         self.checker = checker
         self.webhook_sender = webhook_sender
         self.retention_runner = retention_runner
+        self.workflow_runner = workflow_runner
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
         self.coordinator = coordinator
@@ -133,6 +135,28 @@ class Scheduler:
             status = self.queue_store.fail_job(job["id"], str(error), current, org_id, lease_token=job.get("lease_token"))
             return {"job_id": job["id"], "status": status, "error": str(error)}
 
+    def _run_workflow(self, job: dict[str, Any], current: float, org_id: str) -> dict[str, Any]:
+        if self.workflow_runner is None:
+            error = "workflow worker is not configured"
+            status = self.queue_store.fail_job(job["id"], error, current, org_id, lease_token=job.get("lease_token"))
+            return {"job_id": job["id"], "status": status, "error": error}
+        try:
+            self._check_limit(org_id, "workflow", self.scheduled_limiter, 100.0, 100.0 / 3600.0)
+            import json
+            payload = job.get("payload_json") or "{}"
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            result = self.workflow_runner(payload, org_id)
+            self.queue_store.cancel_job(job["id"], org_id, job.get("lease_token"))
+            return {"job_id": job["id"], "status": "succeeded", "result": result}
+        except RateLimitError as error:
+            delay = float(error.retry_after or 1.0)
+            status = self.queue_store.fail_job(job["id"], str(error), current, org_id, retry_delay=delay, lease_token=job.get("lease_token"))
+            return {"job_id": job["id"], "status": status, "error": str(error), "retry_after": delay}
+        except Exception as error:  # noqa: BLE001 - scheduler owns bounded retry semantics
+            status = self.queue_store.fail_job(job["id"], str(error)[:500], current, org_id, lease_token=job.get("lease_token"))
+            return {"job_id": job["id"], "status": status, "error": str(error)[:500]}
+
     def run_once(self, now: float | None = None) -> dict[str, Any] | None:
         """Claim and execute the highest-priority due job; return None when no job is due."""
         current = time.time() if now is None else now
@@ -144,6 +168,8 @@ class Scheduler:
             return self._run_webhook(job, current, org_id)
         if job.get("job_type") == "retention_gc":
             return self._run_retention(job, current, org_id)
+        if job.get("job_type") == "workflow_run":
+            return self._run_workflow(job, current, org_id)
         monitor_id = job.get("monitor_id")
         monitor = self.store.get_monitor(monitor_id, org_id) if monitor_id else None
         if not monitor or monitor.status != "active":
