@@ -122,6 +122,12 @@ class AgentWebEngine:
         if not surface.allowed:
             return None
         self.memory.snapshot(url, text, utc_now(), org_id)
+        structured_data = {
+            "tables": [table[:20] for table in parsed.tables[:5]],
+            "entities": parsed.entities[:30],
+        }
+        if not structured_data["tables"] and not structured_data["entities"]:
+            structured_data = None
         return Source(
             id=self._source_id(result.url),
             url=result.url,
@@ -130,6 +136,7 @@ class AgentWebEngine:
             trust_score=self._trust_score(result.url, title),
             content_type=result.content_type,
             extraction_confidence=round(0.85 if text else 0.20, 2),
+            structured_data=structured_data,
         )
 
     def browser_open(self, url: str, actions: list[dict] | None = None, org_id: str = "development"):

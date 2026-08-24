@@ -30,6 +30,7 @@ class Source:
     published_at: str | None = None
     content_type: str | None = None
     extraction_confidence: float | None = None
+    structured_data: dict[str, Any] | None = None
 
 
 @dataclass

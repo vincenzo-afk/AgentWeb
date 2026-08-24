@@ -28,8 +28,23 @@ class SynthesisResult:
     structured_output: dict[str, Any] | None = None
 
 
+def _structured_evidence(source: Source) -> list[str]:
+    data = source.structured_data or {}
+    evidence: list[str] = []
+    for entity in data.get("entities", [])[:10]:
+        if str(entity).strip():
+            evidence.append(f"entity: {str(entity).strip()}")
+    for table_index, table in enumerate(data.get("tables", [])[:3], start=1):
+        for row in table[:5]:
+            values = [str(value).strip() for value in row if str(value).strip()]
+            if values:
+                evidence.append(f"table {table_index}: " + " | ".join(values[:10]))
+    return evidence[:20]
+
+
 def _signals(source: Source) -> list[tuple[str, str]]:
-    text = f"{source.title} {source.snippet}"
+    structured_text = " ".join(_structured_evidence(source))
+    text = f"{source.title} {source.snippet} {structured_text}"
     signals = [("price", match.group(0)) for match in _PRICE_RE.finditer(text)]
     signals.extend(("availability", match.group(1).lower()) for match in _AVAILABILITY_RE.finditer(text))
     return signals
@@ -61,6 +76,7 @@ def _render_text(task: str, sources: list[Source], conflicts: list[dict[str, Any
         f"AgentWeb reviewed {len(sources)} source(s) for this task: {task}\n\n"
         + "\n".join(
             f"{index}. {source.title or source.url} — {source.snippet[:280]}"
+            + ("\n" + "\n".join(f"   {source.id}: {claim}" for claim in _structured_evidence(source)) if _structured_evidence(source) else "")
             for index, source in enumerate(sources, start=1)
         )
     )
@@ -79,7 +95,7 @@ def _render_comparison(task: str, sources: list[Source], conflicts: list[dict[st
         label = source.title or source.url
         evidence = source.snippet.replace("|", "\\|")[:280]
         rows.append(f"| {label} | {source.trust_score:.2f} | {evidence} |")
-        items.append({"source_id": source.id, "title": source.title, "url": source.url, "trust_score": source.trust_score, "evidence": source.snippet[:280]})
+        items.append({"source_id": source.id, "title": source.title, "url": source.url, "trust_score": source.trust_score, "evidence": source.snippet[:280], "structured_evidence": _structured_evidence(source)})
     if conflicts:
         rows.append("")
         rows.append("**Conflicts:** " + "; ".join(item["field"] for item in conflicts))
@@ -87,7 +103,7 @@ def _render_comparison(task: str, sources: list[Source], conflicts: list[dict[st
 
 
 def _render_timeline(task: str, sources: list[Source], conflicts: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
-    items = [{"source_id": source.id, "label": source.title or source.url, "evidence": source.snippet[:280]} for source in sources]
+    items = [{"source_id": source.id, "label": source.title or source.url, "evidence": source.snippet[:280], "structured_evidence": _structured_evidence(source)} for source in sources]
     answer = f"Timeline-style evidence for: {task}\n\n" + "\n".join(
         f"{index}. {item['label']} — {item['evidence']}" for index, item in enumerate(items, start=1)
     )
@@ -109,6 +125,10 @@ def _claim_citations(answer: str, selected: list[Source]) -> list[Citation]:
             if match:
                 index = int(match.group(1)) - 1
                 ids = [selected[index].id] if 0 <= index < len(selected) else source_ids
+            else:
+                matching_ids = [source.id for source in selected if f"{source.id}:" in content]
+                if matching_ids:
+                    ids = matching_ids
             citations.append(Citation(claim_span=[offset, offset + len(content)], source_ids=ids))
         offset += len(line)
     return citations
@@ -144,7 +164,7 @@ def synthesize(ranked_sources: list[RankedSource], task: str, output_format: str
     else:
         structured = {
             "task": task,
-            "sources": [{"id": source.id, "url": source.url, "title": source.title, "snippet": source.snippet[:280]} for source in selected],
+            "sources": [{"id": source.id, "url": source.url, "title": source.title, "snippet": source.snippet[:280], "structured_evidence": _structured_evidence(source)} for source in selected],
             "conflicts": conflicts,
         }
         answer = json.dumps(structured, ensure_ascii=False, sort_keys=True)

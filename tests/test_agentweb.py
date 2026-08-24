@@ -288,6 +288,17 @@ class AgentWebTests(unittest.TestCase):
         self.assertIsNotNone(trace)
         self.assertTrue(any(span["component"] == "synthesis" for span in trace["spans"]))
 
+    def test_synthesis_includes_structured_source_evidence(self):
+        original = FixtureHandler.body
+        FixtureHandler.body = b"<html><title>Widget Catalog</title><body><table><tr><th>Item</th><th>Price</th></tr><tr><td>Alpha</td><td>$10</td></tr></table><p>Acme Corporation available</p></body></html>"
+        try:
+            response = self.engine.solve(f"Summarize {self.url}", mode="focus")
+            self.assertIn("table 1", response.answer)
+            self.assertTrue(response.sources[0].structured_data)
+            self.assertTrue(any(response.sources[0].id in citation.source_ids for citation in response.citations))
+        finally:
+            FixtureHandler.body = original
+
     def test_monitor_lifecycle_and_snapshot_reuse(self):
         monitor = self.engine.create_monitor(f"Watch {self.url}", "hourly")
         first = self.engine.check_monitor(monitor)

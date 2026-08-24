@@ -690,6 +690,22 @@ components:
           minimum: 0
           maximum: 1
           nullable: true
+        structured_data:
+          type: object
+          nullable: true
+          properties:
+            tables:
+              type: array
+              items:
+                type: array
+                items:
+                  type: array
+                  items:
+                    type: string
+            entities:
+              type: array
+              items:
+                type: string
     Citation:
       type: object
       required: [claim_span, source_ids]
