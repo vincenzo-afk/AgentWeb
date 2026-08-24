@@ -5,7 +5,7 @@ from .browser import BrowserEngine, BrowserSession
 from .credentials import BrowserCredentialStore
 from .engine import AgentWebEngine
 from .maintenance import purge_retention
-from .metrics import MetricStore, MetricsRegistry
+from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from .scheduler import Scheduler
 from .rdbms import DatabaseConfig, PostgresDistributedQueue, PostgresRelationalStore, open_distributed_queue, open_relational_store
 from .search import JsonSearchProvider, SearchProviderConfig, SearchProviderError, build_search_provider, search
@@ -16,6 +16,7 @@ __all__ = [
     "AgentWebEngine",
     "MetricStore",
     "MetricsRegistry",
+    "PostgresMetricStore",
     "purge_retention",
     "BrowserCredentialStore",
     "BrowserEngine",

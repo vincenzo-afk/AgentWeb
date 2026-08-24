@@ -158,6 +158,19 @@ CREATE TABLE IF NOT EXISTS queue_rate_limits (
     PRIMARY KEY (org_id, bucket)
 );
 CREATE INDEX IF NOT EXISTS idx_queue_rate_limits_updated ON queue_rate_limits(updated_at);
+CREATE TABLE IF NOT EXISTS metric_points (
+    org_id VARCHAR(100) NOT NULL REFERENCES organizations(id),
+    metric_key TEXT NOT NULL,
+    kind VARCHAR(32) NOT NULL,
+    counter BIGINT NOT NULL DEFAULT 0,
+    sample_count BIGINT NOT NULL DEFAULT 0,
+    sample_sum DOUBLE PRECISION NOT NULL DEFAULT 0,
+    gauge_value DOUBLE PRECISION NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (org_id, metric_key, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_metric_points_org_time ON metric_points(org_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_metric_points_key ON metric_points(metric_key, kind);
 CREATE INDEX IF NOT EXISTS idx_audit_org_time ON audit_events(org_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_usage_org_period ON usage_records(org_id, period);
 CREATE INDEX IF NOT EXISTS idx_api_keys_org_revoked ON api_keys(org_id, revoked_at);

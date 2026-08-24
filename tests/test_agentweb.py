@@ -25,9 +25,9 @@ from agentweb.errors import AuthenticationError, BrowserUnavailableError, Permis
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
 from agentweb.maintenance import purge_retention
-from agentweb.metrics import MetricStore, MetricsRegistry
+from agentweb.metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
-from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError, POSTGRES_SCHEMA, open_distributed_queue
+from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError, POSTGRES_SCHEMA, PostgresDistributedQueue, open_distributed_queue
 from agentweb.trace import Span
 from agentweb.search import JsonSearchProvider, SearchProviderConfig, search
 from agentweb.scheduler import Scheduler
@@ -646,6 +646,79 @@ class AgentWebTests(unittest.TestCase):
         constants = " ".join(str(item) for item in __import__("agentweb.rdbms", fromlist=["PostgresDistributedQueue"]).PostgresDistributedQueue.claim_due_job.__code__.co_consts)
         self.assertIn("FOR UPDATE SKIP LOCKED", constants)
         self.assertIn("CREATE TABLE IF NOT EXISTS queue_rate_limits", POSTGRES_SCHEMA)
+        self.assertIn("CREATE TABLE IF NOT EXISTS metric_points", POSTGRES_SCHEMA)
+        self.assertIn("idx_metric_points_org_time", POSTGRES_SCHEMA)
+
+    def test_postgres_metric_store_aggregates_and_filters_by_organization(self):
+        class FakeCursor:
+            def __init__(self, rows):
+                self.rows = rows
+                self.selected_rows = rows
+                self.statements = []
+                self.rowcount = 3
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=()):
+                self.statements.append((query, params))
+                if "WHERE org_id=%s" in query:
+                    self.selected_rows = [row for row in self.rows if row[0] == params[0]]
+                else:
+                    self.selected_rows = self.rows
+
+            def fetchall(self):
+                return self.selected_rows
+
+        class FakeConnection:
+            def __init__(self, cursor):
+                self.cursor_instance = cursor
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return self.cursor_instance
+
+        class FakeCoordinator:
+            def __init__(self, connection):
+                self.connection_instance = connection
+
+            def connection(self):
+                return self.connection_instance
+
+        rows = [
+            ("org-a", 'request_count|{"endpoint":"/solve","org_id":"org-a"}', "counter", 4, 0, 0, None),
+            ("org-b", 'request_count|{"endpoint":"/solve","org_id":"org-b"}', "counter", 9, 0, 0, None),
+            ("org-a", 'request_latency|{"endpoint":"/solve","org_id":"org-a"}', "observation", 0, 2, 1.5, None),
+        ]
+        cursor = FakeCursor(rows)
+        store = PostgresMetricStore(FakeCoordinator(FakeConnection(cursor)))
+        store.increment("request_count|{\"org_id\":\"org-a\"}", 1, {"org_id": "org-a"})
+        store.observe("request_latency|{\"org_id\":\"org-a\"}", 0.75, {"org_id": "org-a"})
+        store.gauge("queue_depth|{\"org_id\":\"org-a\"}", 2, {"org_id": "org-a"})
+        visible = store.snapshot("org-a")
+        self.assertEqual(visible["counters"]["request_count{endpoint=/solve,org_id=org-a}"], 4)
+        self.assertNotIn("request_count{endpoint=/solve,org_id=org-b}", visible["counters"])
+        self.assertEqual(visible["observations"]["request_latency{endpoint=/solve,org_id=org-a}"], {"count": 2, "sum": 1.5})
+        self.assertEqual(store.purge_expired(60, now=time.time() + 61, org_id="org-a"), 3)
+        self.assertEqual(len(cursor.statements), 5)
+        self.assertTrue(all("metric_points" in statement[0] for statement in cursor.statements))
+        self.assertIn("org_id=%s", cursor.statements[-1][0])
+        self.assertIn("updated_at < %s", cursor.statements[-1][0])
+
+    def test_engine_selects_postgres_metrics_only_for_distributed_coordinator(self):
+        self.assertIsInstance(self.engine.metrics.store, MetricStore)
+        distributed = object.__new__(PostgresDistributedQueue)
+        distributed.connection = lambda: None
+        engine = AgentWebEngine(self.store, queue_coordinator=distributed)
+        self.assertIsInstance(engine.metrics.store, PostgresMetricStore)
 
     def test_distributed_queue_requires_postgresql_url(self):
         with patch.dict(os.environ, {"AGENTWEB_DISTRIBUTED_QUEUE": "1"}, clear=False):

@@ -14,13 +14,14 @@ from .crawler import Crawler
 from .credentials import BrowserCredentialStore
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .memory import MemoryStore
-from .metrics import MetricStore, MetricsRegistry
+from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .synthesis import synthesize
 from .parser import parse
 from .ranking import rank
 from .redaction import redact_text, redact_url
+from .rdbms import PostgresDistributedQueue
 from .scheduler import Scheduler
 from .search import SearchProvider, build_search_provider, search
 from .secrets import SecretProvider, build_provider
@@ -39,11 +40,16 @@ class AgentWebEngine:
         queue_coordinator: object | None = None,
     ) -> None:
         self.memory = memory or MemoryStore()
-        self.metrics = MetricsRegistry(MetricStore(self.memory.path))
+        self.queue_coordinator = queue_coordinator
+        metric_backend = (
+            PostgresMetricStore(queue_coordinator)
+            if isinstance(queue_coordinator, PostgresDistributedQueue)
+            else MetricStore(self.memory.path)
+        )
+        self.metrics = MetricsRegistry(metric_backend)
         self.secret_provider = secret_provider or build_provider()
         self.credentials = BrowserCredentialStore(self.memory.path, self.secret_provider)
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
-        self.queue_coordinator = queue_coordinator
         self.traces = TraceStore(self.memory.path)
         self.trust_engine = TrustEngine(
             blocked_domains={domain for domain in os.getenv("AGENTWEB_BLOCKED_DOMAINS", "").split(",") if domain}
