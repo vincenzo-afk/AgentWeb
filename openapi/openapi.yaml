@@ -451,6 +451,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GraphRelation'
+  /learning/summary:
+    get:
+      summary: List strategy outcome summaries
+      operationId: listLearningSummaries
+      security:
+        - bearerAuth: [learning:read]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Tenant-scoped aggregate strategy outcomes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LearningSummaryPage'
+  /learning/outcomes:
+    post:
+      summary: Record redacted strategy outcome feedback
+      operationId: recordLearningOutcome
+      security:
+        - bearerAuth: [learning:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LearningOutcomeInput'
+      responses:
+        '201':
+          description: Outcome recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LearningOutcome'
   /workflows:
     get:
       summary: List event-driven workflow definitions
@@ -878,6 +914,47 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    LearningOutcomeInput:
+      type: object
+      required: [strategy, success, evidence_score]
+      properties:
+        strategy: { type: string, minLength: 1, maxLength: 120 }
+        mode: { type: string, enum: [flash, focus, dive, monitor] }
+        success: { type: boolean }
+        evidence_score: { type: number, minimum: 0, maximum: 1 }
+        execution_id: { type: string }
+        latency_ms: { type: integer, minimum: 0, maximum: 86400000 }
+    LearningOutcome:
+      type: object
+      required: [id, strategy, mode, success, evidence_score, created_at]
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        strategy: { type: string }
+        mode: { type: string }
+        execution_id: { type: [string, 'null'] }
+        success: { type: boolean }
+        evidence_score: { type: number }
+        latency_ms: { type: [integer, 'null'] }
+        created_at: { type: number }
+    LearningSummary:
+      type: object
+      required: [strategy, mode, observations, success_rate, average_evidence_score]
+      properties:
+        strategy: { type: string }
+        mode: { type: string }
+        observations: { type: integer }
+        success_rate: { type: number }
+        average_evidence_score: { type: number }
+        average_latency_ms: { type: [number, 'null'] }
+        last_observed_at: { type: number }
+    LearningSummaryPage:
+      type: object
+      required: [strategies, data]
+      properties:
+        _meta: { $ref: '#/components/schemas/ResponseMetadata' }
+        strategies: { type: array, items: { $ref: '#/components/schemas/LearningSummary' } }
+        data: { type: array, items: { $ref: '#/components/schemas/LearningSummary' } }
     WorkflowInput:
       type: object
       required: [name, monitor_id, task_template]

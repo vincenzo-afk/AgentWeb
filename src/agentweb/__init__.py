@@ -7,6 +7,7 @@ from .connectors import Connector, ConnectorRegistry
 from .credentials import BrowserCredentialStore
 from .engine import AgentWebEngine
 from .graph import Entity, GraphResult, GraphStore, Relation
+from .learning import LearningStore
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from .planner import Plan, PlanStep, PlanStore, Planner, StoredPlan
@@ -27,6 +28,7 @@ __all__ = [
     "Entity",
     "GraphResult",
     "GraphStore",
+    "LearningStore",
     "Relation",
     "MetricStore",
     "MetricsRegistry",

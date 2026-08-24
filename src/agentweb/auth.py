@@ -29,6 +29,8 @@ ALL_SCOPES = {
     "graph:read",
     "graph:write",
     "workflow:manage",
+    "learning:read",
+    "learning:write",
     "admin:*",
 }
 

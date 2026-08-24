@@ -42,6 +42,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | Browser execution | `POST /browser/sessions` renders JavaScript pages through fresh contexts and a bounded lazily spawned browser-worker pool; worker failures remain typed and retryable. Authorized operators can provision encrypted, origin-bound storage state and reuse it through opaque `session_state_id` references without exposing tokens. |
 | Connector routing | Applications can register URL/domain connectors through `ConnectorRegistry`; the router selects the longest matching pattern and applies bounded extraction hints, default browser actions, and ranking bias without changing generic fallback behavior. |
 | Vector retrieval | `VectorStore` provides deterministic hashed-token embeddings, persistent nearest-neighbor search, separate `skills` and `entities:<org_id>` namespaces, semantic skill fallback matching, and cautious graph entity resolution. |
+| Learning loop | Every solve records redacted strategy, mode, success, evidence, execution ID, and latency signals; `GET /learning/summary` exposes tenant-scoped aggregates and `POST /learning/outcomes` accepts bounded evaluator feedback without raw task content. |
 | Administration | Authenticated `admin:*` keys can create/list/revoke organization keys and browser credentials/session states, read cursor-paginated immutable audit events, and read monthly usage summaries; mutating operations support idempotency keys, and plaintext secrets are returned only once at creation. |
 | Knowledge graph | Tenant-scoped entity and relation upserts are available through `POST /graph/entities` and `POST /graph/relations`; extraction and monitor checks automatically add page/mention provenance; `GET /graph/query` supports entity, relation, related-node, and bounded depth filters. Source provenance, observation counts, corroboration bonuses, stale-edge decay, and organization isolation are preserved. |
 | Event-driven workflows | `POST /workflows` registers an organization-scoped task template for monitor change events; matching changes render the template, execute a grounded solve, and persist a redacted run record available through `GET /workflows/runs`. |
@@ -183,6 +184,8 @@ The API returns JSON. The canonical public URL form is `/v1/...`, matching the O
 | `GET` | `/workflows` | List organization-scoped event-driven workflow definitions; requires `workflow:manage`. |
 | `POST` | `/workflows` | Register a monitor event workflow with a bounded task template; requires `workflow:manage` and supports `Idempotency-Key`. |
 | `GET` | `/workflows/runs` | List organization-scoped workflow execution records; requires `workflow:manage`. |
+| `GET` | `/learning/summary` | List tenant-scoped strategy and mode outcome aggregates; requires `learning:read`. |
+| `POST` | `/learning/outcomes` | Record bounded evaluator feedback without raw task content; requires `learning:write` and supports `Idempotency-Key`. |
 | `GET` | `/report/{execution_id}` | Retrieve a secret-safe execution trace belonging to the caller's organization. |
 | `GET` | `/report/{execution_id}/replay` | Retrieve an ordered, read-only historical replay projection with sanitized summaries; no network calls or side effects are performed. |
 | `GET` | `/admin/keys` | List redacted, cursor-paginated API keys for the caller's organization; requires `admin:*`. |
@@ -278,7 +281,7 @@ These limitations are explicit so the repository's runnable behavior remains dis
 
 ## Roadmap
 
-The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline, several Phase 1 foundations, a Phase 2 graph storage/query slice, an initial event-driven workflow trigger, connector-aware routing, and deterministic vector retrieval, including bounded durable crawling, scheduled monitoring, process-isolated browser execution, encrypted reusable browser session state, tenant-scoped graph entities/relations, corroboration-aware graph confidence, monitor-triggered task templates, persisted workflow runs, semantic skill fallback, and cautious entity resolution. Future phases cover distributed workflow execution, richer event integrations, and calibrated production evaluation.
+The source roadmap is [`docs/roadmap.md`](docs/roadmap.md). The current implementation covers the dependency-free core of the Phase 0 baseline, several Phase 1 foundations, a Phase 2 graph storage/query slice, an initial event-driven workflow trigger, connector-aware routing, deterministic vector retrieval, and a privacy-safe learning loop, including bounded durable crawling, scheduled monitoring, process-isolated browser execution, encrypted reusable browser session state, tenant-scoped graph entities/relations, corroboration-aware graph confidence, monitor-triggered task templates, persisted workflow runs, semantic skill fallback, cautious entity resolution, automatic solve outcome recording, and aggregate strategy summaries. Future phases cover distributed workflow execution, richer event integrations, and calibrated production evaluation.
 
 ## Contributing
 

@@ -19,6 +19,7 @@ from .credentials import BrowserCredentialStore
 from .connectors import ConnectorRegistry
 from .fetch import extract_metadata, fetch_url, html_to_text, validate_url
 from .graph import GraphStore
+from .learning import LearningStore
 from .memory import MemoryStore
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
@@ -53,6 +54,7 @@ class AgentWebEngine:
         self.memory = memory or MemoryStore()
         self.graph = GraphStore(self.memory.path)
         self.workflows = WorkflowStore(self.memory.path, self._run_workflow)
+        self.learning = LearningStore(self.memory.path)
         self.queue_coordinator = queue_coordinator
         metric_backend = (
             PostgresMetricStore(queue_coordinator)
@@ -581,6 +583,15 @@ class AgentWebEngine:
             }
         )
         self.traces.save(execution_id, spans, org_id=org_id)
+        self.learning.record_outcome(
+            strategy=plan.skill or plan.intent,
+            mode=mode,
+            success=not synthesis_result.insufficient_evidence and synthesis_result.evidence_score >= 0.50,
+            evidence_score=synthesis_result.evidence_score,
+            org_id=org_id,
+            execution_id=execution_id,
+            latency_ms=int(max(0.0, time.time() - started) * 1000),
+        )
         self.memory.record_usage(org_id, mode)
         self.metrics.gauge("memory_reuse_rate", reuse_hits / max(1, len(requested_urls)), {"org_id": org_id})
         self.metrics.observe("cost_per_run", {"flash": 0.01, "focus": 0.05, "dive": 0.20}[mode], {"mode": mode, "org_id": org_id})
