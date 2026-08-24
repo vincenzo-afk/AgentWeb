@@ -8,6 +8,7 @@
 | Execution graphs/traces | 30 days | Needed for [debugging](../getting-started/debugging-basics.md) and replay |
 | Idempotency keys | 24 hours | See [api/idempotency.md](../api/idempotency.md) |
 | API usage/billing records | 24 months | For account history and invoicing |
+| Security audit events | 730 days | Local default; configurable through `agentweb gc --audit-days`, with optional organization scoping |
 | Graph entities/relationships | Indefinite (until explicitly deleted) | Subject to org-level deletion requests |
 
 ## Deletion requests

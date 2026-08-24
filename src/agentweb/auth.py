@@ -201,13 +201,36 @@ class KeyStore:
                 ("aud_" + uuid.uuid4().hex[:16], org_id, actor[:100], action[:100], target[:200], time.time(), json.dumps(metadata, separators=(",", ":"))),
             )
 
-    def list_audit(self, org_id: str, limit: int = 100) -> list[dict]:
-        limit = max(1, min(int(limit), 1000))
+    def list_audit(
+        self,
+        org_id: str,
+        limit: int = 10_000,
+        *,
+        action: str | None = None,
+        actor: str | None = None,
+        target: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> list[dict]:
+        limit = max(1, min(int(limit), 10_000))
+        clauses = ["org_id=?"]
+        parameters: list[object] = [org_id]
+        for column, value in (("action", action), ("actor", actor), ("target", target)):
+            if value is not None:
+                clauses.append(f"{column}=?")
+                parameters.append(value)
+        if since is not None:
+            clauses.append("timestamp>=?")
+            parameters.append(float(since))
+        if until is not None:
+            clauses.append("timestamp<=?")
+            parameters.append(float(until))
+        parameters.append(limit)
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT id, org_id, actor, action, target, timestamp, metadata FROM audit_events "
-                "WHERE org_id=? ORDER BY timestamp DESC LIMIT ?",
-                (org_id, limit),
+                f"WHERE {' AND '.join(clauses)} ORDER BY timestamp DESC, id DESC LIMIT ?",
+                parameters,
             ).fetchall()
         return [
             {
@@ -221,6 +244,19 @@ class KeyStore:
             }
             for row in rows
         ]
+
+    def purge_expired_audit(self, retention_seconds: float, now: float | None = None, org_id: str | None = None) -> int:
+        if retention_seconds < 0:
+            raise ValueError("audit retention cannot be negative")
+        cutoff = (time.time() if now is None else now) - retention_seconds
+        clauses = ["timestamp < ?"]
+        parameters: list[object] = [cutoff]
+        if org_id is not None:
+            clauses.append("org_id = ?")
+            parameters.append(org_id)
+        with self._connect() as connection:
+            cursor = connection.execute(f"DELETE FROM audit_events WHERE {' AND '.join(clauses)}", parameters)
+        return cursor.rowcount
 
 
 class Authenticator:

@@ -19,7 +19,7 @@ Base URL: `https://api.agentweb.dev/v1`
 | GET | `/admin/keys` | List redacted API keys with cursor pagination |
 | POST | `/admin/keys` | Create an API key with idempotency support |
 | DELETE | `/admin/keys/{id}` | Revoke an API key with idempotency support |
-| GET | `/admin/audit` | List immutable security events with cursor pagination |
+| GET | `/admin/audit` | List immutable security events with cursor pagination and optional action/actor/target/time-range filters |
 | GET | `/admin/usage` | View organization usage and estimated billing |
 | DELETE | `/admin/data` | Delete organization-owned snapshots and execution traces; supports idempotency |
 | GET | `/admin/metrics` | Read organization-scoped operational metrics |

@@ -6,9 +6,11 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import os
 import re
 import time
+from datetime import datetime, timezone
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,6 +45,32 @@ def _decode_cursor(value: str) -> int:
 def _encode_cursor(offset: int) -> str:
     raw = json.dumps({"offset": offset}, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _parse_audit_timestamp(query: dict[str, list[str]], name: str) -> float | None:
+    raw = query.get(name, [None])[0]
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc).timestamp()
+        except (TypeError, ValueError):
+            raise InvalidRequestError(f"{name} must be a Unix timestamp or ISO-8601 UTC time")
+    if not math.isfinite(value):
+        raise InvalidRequestError(f"{name} must be a finite timestamp")
+    return value
+
+
+def _audit_filter(query: dict[str, list[str]], name: str) -> str | None:
+    raw = query.get(name, [None])[0]
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value or len(value) > 200:
+        raise InvalidRequestError(f"{name} must contain between 1 and 200 characters")
+    return value
 
 
 def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, bool]:
@@ -264,7 +292,21 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, {"keys": keys, "data": keys, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
             if path == "/admin/audit":
-                events, next_cursor, has_more = _page(self.authenticator.key_store.list_audit(principal.org_id), query)
+                since = _parse_audit_timestamp(query, "since")
+                until = _parse_audit_timestamp(query, "until")
+                if since is not None and until is not None and since > until:
+                    raise InvalidRequestError("since must be earlier than or equal to until")
+                events, next_cursor, has_more = _page(
+                    self.authenticator.key_store.list_audit(
+                        principal.org_id,
+                        action=_audit_filter(query, "action"),
+                        actor=_audit_filter(query, "actor"),
+                        target=_audit_filter(query, "target"),
+                        since=since,
+                        until=until,
+                    ),
+                    query,
+                )
                 self._send_json(HTTPStatus.OK, {"events": events, "data": events, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
             if path == "/admin/metrics":

@@ -7,6 +7,7 @@ import json
 import sys
 
 from .api import create_server
+from .auth import KeyStore
 from .engine import AgentWebEngine
 from .maintenance import purge_retention
 from .memory import MemoryStore
@@ -45,11 +46,13 @@ def _gc_main(argv: list[str]) -> None:
     parser.add_argument("--snapshot-days", type=int, default=90, help="Snapshot retention window.")
     parser.add_argument("--trace-days", type=int, default=30, help="Trace retention window.")
     parser.add_argument("--metric-days", type=int, default=30, help="Metric retention window.")
+    parser.add_argument("--audit-days", type=int, default=730, help="Audit-event retention window (default: 730 days).")
     parser.add_argument("--org", default=None, help="Limit cleanup to one organization.")
     args = parser.parse_args(argv[1:])
     memory = MemoryStore(args.data)
     engine = AgentWebEngine(memory)
-    print(json.dumps(purge_retention(memory, engine.traces, snapshot_retention_days=args.snapshot_days, trace_retention_days=args.trace_days, metric_retention_days=args.metric_days, org_id=args.org, metrics=engine.metrics), indent=2))
+    audit_store = KeyStore(args.data)
+    print(json.dumps(purge_retention(memory, engine.traces, snapshot_retention_days=args.snapshot_days, trace_retention_days=args.trace_days, metric_retention_days=args.metric_days, audit_retention_days=args.audit_days, org_id=args.org, metrics=engine.metrics, audit_store=audit_store), indent=2))
 
 
 def main() -> None:

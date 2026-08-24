@@ -303,9 +303,46 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: actor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: target
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: since
+          in: query
+          required: false
+          description: Inclusive Unix timestamp or ISO-8601 UTC timestamp.
+          schema:
+            type: string
+        - name: until
+          in: query
+          required: false
+          description: Inclusive Unix timestamp or ISO-8601 UTC timestamp.
+          schema:
+            type: string
       responses:
         '200':
           description: Organization audit events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventPage'
   /admin/usage:
     get:
       summary: Read current-period usage and estimated cost for the organization
@@ -573,6 +610,41 @@ components:
         revoked_at:
           type: number
           nullable: true
+    AuditEvent:
+      type: object
+      required: [id, org_id, actor, action, target, timestamp, metadata]
+      properties:
+        id:
+          type: string
+        org_id:
+          type: string
+        actor:
+          type: string
+        action:
+          type: string
+        target:
+          type: string
+        timestamp:
+          type: number
+        metadata:
+          type: object
+    AuditEventPage:
+      type: object
+      required: [events, data, next_cursor, has_more]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     ApiKeyCreated:
       allOf:
         - $ref: '#/components/schemas/ApiKey'

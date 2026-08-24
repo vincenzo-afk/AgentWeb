@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 from unittest.mock import patch
@@ -21,6 +22,7 @@ from agentweb.engine import AgentWebEngine
 from agentweb.errors import AuthenticationError, BrowserUnavailableError, PermissionError
 from agentweb.fetch import html_to_text
 from agentweb.memory import MemoryStore
+from agentweb.maintenance import purge_retention
 from agentweb.metrics import MetricStore, MetricsRegistry
 from agentweb.migrations import _prepare_row, export_sqlite_relational
 from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError, POSTGRES_SCHEMA, open_distributed_queue
@@ -213,6 +215,26 @@ class AgentWebTests(unittest.TestCase):
         }
         prepared = _prepare_row("monitors", row)
         self.assertIsNone(prepared[-1])
+
+    def test_audit_filters_time_ranges_and_retention_are_organization_scoped(self):
+        audit = KeyStore(Path(self.temp_dir.name) / "audit.sqlite3")
+        started = time.time()
+        audit.audit("org-a", "operator", "config.changed", "monitor-1", {"safe": True})
+        audit.audit("org-a", "other", "api_key.created", "key-1", {})
+        audit.audit("org-b", "operator", "config.changed", "monitor-2", {})
+        filtered = audit.list_audit("org-a", action="config.changed", actor="operator", target="monitor-1", since=started - 1, until=time.time() + 1)
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["org_id"], "org-a")
+        self.assertEqual(filtered[0]["metadata"], {"safe": True})
+        self.assertEqual(audit.list_audit("org-a", action="config.changed", actor="operator", target="monitor-2"), [])
+        with sqlite3.connect(audit.path) as connection:
+            connection.execute("UPDATE audit_events SET timestamp=? WHERE target=?", (1.0, "monitor-1"))
+        result = purge_retention(self.store, self.engine.traces, audit_store=audit, audit_retention_days=1, now=100_000, org_id="org-a")
+        self.assertEqual(result["deleted_audit"], 1)
+        remaining = audit.list_audit("org-a")
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["target"], "key-1")
+        self.assertEqual(len(audit.list_audit("org-b")), 1)
 
     def test_durable_metrics_persist_filter_and_purge_by_organization(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -682,6 +704,39 @@ class AgentWebTests(unittest.TestCase):
             response = server.authenticator.key_store.list_audit("org-a")
             self.assertTrue(any(event["action"] == "api_key.created" for event in response))
             self.assertFalse(any(admin_a in json.dumps(event) for event in response))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_audit_filters_pagination_and_time_validation(self):
+        data_path = Path(self.temp_dir.name) / "audit-api.sqlite3"
+        server = create_server("127.0.0.1", 0, str(data_path))
+        admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
+        server.authenticator.key_store.audit("org-a", "operator", "config.changed", "monitor-1", {"version": 1})
+        server.authenticator.key_store.audit("org-a", "operator", "config.changed", "monitor-2", {"version": 2})
+        server.authenticator.key_store.audit("org-b", "operator", "config.changed", "monitor-3", {"version": 3})
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            headers = {"Authorization": f"Bearer {admin}"}
+            base = f"http://127.0.0.1:{server.server_port}/admin/audit?action=config.changed&actor=operator&limit=1"
+            with urlopen(Request(base, headers=headers)) as response:
+                first = json.loads(response.read())
+            self.assertEqual(len(first["data"]), 1)
+            self.assertTrue(first["has_more"])
+            self.assertEqual(first["data"][0]["org_id"], "org-a")
+            self.assertEqual(first["data"][0]["target"], "monitor-2")
+            with urlopen(Request(base + "&cursor=" + first["next_cursor"], headers=headers)) as response:
+                second = json.loads(response.read())
+            self.assertEqual(len(second["data"]), 1)
+            self.assertEqual(second["data"][0]["target"], "monitor-1")
+            with urlopen(Request(base + "&target=monitor-1&since=1970-01-01T00:00:00Z", headers=headers)) as response:
+                filtered = json.loads(response.read())
+            self.assertEqual([event["target"] for event in filtered["data"]], ["monitor-1"])
+            for query in ("since=not-a-time", "since=10&until=1"):
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/audit?{query}", headers=headers))
+                self.assertEqual(raised.exception.code, 400)
         finally:
             server.shutdown()
             server.server_close()
