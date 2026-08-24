@@ -559,6 +559,8 @@ class AgentWebHandler(BaseHTTPRequestHandler):
             "/graph/entities": "graph:write",
             "/graph/relations": "graph:write",
             "/workflows": "workflow:manage",
+            "/workflows/pause": "workflow:manage",
+            "/workflows/resume": "workflow:manage",
             "/learning/outcomes": "learning:write",
             "/browser/sessions": "browser:execute",
             "/admin/keys": "admin:*",

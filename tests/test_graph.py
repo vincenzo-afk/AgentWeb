@@ -247,6 +247,35 @@ class GraphApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["type"], "invalid_request")
 
+    def test_workflow_api_lifecycle_controls_and_runs(self) -> None:
+        status, monitor, _ = self.request("POST", "/v1/observe", {"task": "Watch https://example.com", "frequency": "daily"})
+        self.assertEqual(status, 200)
+        status, workflow, _ = self.request(
+            "POST",
+            "/v1/workflows",
+            {
+                "name": "API controlled workflow",
+                "monitor_id": monitor["id"],
+                "task_template": "Summarize {target}",
+                "event": "monitor.no_change",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(workflow["status"], "active")
+
+        status, listed, _ = self.request("GET", "/v1/workflows")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["id"] for item in listed["workflows"]], [workflow["id"]])
+        status, paused, _ = self.request("POST", "/v1/workflows/pause", {"workflow_id": workflow["id"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(paused["status"], "paused")
+        status, runs, _ = self.request("GET", "/v1/workflows/runs")
+        self.assertEqual(status, 200)
+        self.assertEqual(runs["runs"], [])
+        status, resumed, _ = self.request("POST", "/v1/workflows/resume", {"workflow_id": workflow["id"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(resumed["status"], "active")
+
 
 if __name__ == "__main__":
     unittest.main()
