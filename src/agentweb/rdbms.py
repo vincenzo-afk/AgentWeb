@@ -171,7 +171,10 @@ CREATE TABLE IF NOT EXISTS metric_points (
 );
 CREATE INDEX IF NOT EXISTS idx_metric_points_org_time ON metric_points(org_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_metric_points_key ON metric_points(metric_key, kind);
-CREATE INDEX IF NOT EXISTS idx_audit_org_time ON audit_events(org_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_org_time_id ON audit_events(org_id, timestamp DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_org_action_time ON audit_events(org_id, action, timestamp DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_org_actor_time ON audit_events(org_id, actor, timestamp DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_org_target_time ON audit_events(org_id, target, timestamp DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_org_period ON usage_records(org_id, period);
 CREATE INDEX IF NOT EXISTS idx_api_keys_org_revoked ON api_keys(org_id, revoked_at);
 """

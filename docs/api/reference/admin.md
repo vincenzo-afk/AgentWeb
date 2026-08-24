@@ -16,7 +16,7 @@ Revokes a key only when it belongs to the authenticated organization. Revocation
 
 ## `GET /admin/audit`
 
-Returns immutable organization-scoped security events such as `api_key.created` and `api_key.revoked`. Secrets are never included in event metadata. Optional exact-match filters are available for `action`, `actor`, and `target`; `since` and `until` apply inclusive Unix timestamps or ISO-8601 UTC timestamps. Filters are applied before the bounded opaque-cursor pagination, so the returned cursor must be reused with the same filter set.
+Returns immutable organization-scoped security events such as `api_key.created` and `api_key.revoked`. Secrets are never included in event metadata. Optional exact-match filters are available for `action`, `actor`, and `target`; `since` and `until` apply inclusive Unix timestamps or ISO-8601 UTC timestamps. Filters are applied before bounded opaque-cursor pagination, and the server reads only the requested page plus one look-ahead row from the indexed audit table, so the returned cursor must be reused with the same filter set.
 
 For example, `GET /admin/audit?action=api_key.created&since=2026-01-01T00:00:00Z&limit=25` returns matching events only. Invalid timestamps, reversed ranges, empty filters, and filters longer than 200 characters return `400`.
 

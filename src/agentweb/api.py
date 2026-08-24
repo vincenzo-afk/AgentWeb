@@ -73,14 +73,18 @@ def _audit_filter(query: dict[str, list[str]], name: str) -> str | None:
     return value
 
 
-def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, bool]:
+def _page_window(query: dict[str, list[str]]) -> tuple[int, int]:
     try:
         limit = int(query.get("limit", ["50"])[0])
     except (ValueError, TypeError):
         raise InvalidRequestError("limit must be an integer")
     if limit < 1 or limit > 100:
         raise InvalidRequestError("limit must be between 1 and 100")
-    offset = _decode_cursor(query.get("cursor", [""])[0])
+    return limit, _decode_cursor(query.get("cursor", [""])[0])
+
+
+def _page(items: list, query: dict[str, list[str]]) -> tuple[list, str | None, bool]:
+    limit, offset = _page_window(query)
     page = items[offset : offset + limit]
     has_more = offset + limit < len(items)
     return page, _encode_cursor(offset + limit) if has_more else None, has_more
@@ -300,17 +304,18 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 until = _parse_audit_timestamp(query, "until")
                 if since is not None and until is not None and since > until:
                     raise InvalidRequestError("since must be earlier than or equal to until")
-                events, next_cursor, has_more = _page(
-                    self.authenticator.key_store.list_audit(
-                        principal.org_id,
-                        action=_audit_filter(query, "action"),
-                        actor=_audit_filter(query, "actor"),
-                        target=_audit_filter(query, "target"),
-                        since=since,
-                        until=until,
-                    ),
-                    query,
+                limit, offset = _page_window(query)
+                events, has_more = self.authenticator.key_store.list_audit_page(
+                    principal.org_id,
+                    limit=limit,
+                    offset=offset,
+                    action=_audit_filter(query, "action"),
+                    actor=_audit_filter(query, "actor"),
+                    target=_audit_filter(query, "target"),
+                    since=since,
+                    until=until,
                 )
+                next_cursor = _encode_cursor(offset + limit) if has_more else None
                 self._send_json(HTTPStatus.OK, {"events": events, "data": events, "next_cursor": next_cursor, "has_more": has_more}, request_id)
                 return
             if path == "/admin/metrics":

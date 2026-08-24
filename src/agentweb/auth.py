@@ -81,7 +81,10 @@ class KeyStore:
                     timestamp REAL NOT NULL,
                     metadata TEXT NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_audit_org_time ON audit_events(org_id, timestamp);
+                CREATE INDEX IF NOT EXISTS idx_audit_org_time_id ON audit_events(org_id, timestamp DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_org_action_time ON audit_events(org_id, action, timestamp DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_org_actor_time ON audit_events(org_id, actor, timestamp DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_org_target_time ON audit_events(org_id, target, timestamp DESC, id DESC);
                 """
             )
             connection.execute(
@@ -201,18 +204,27 @@ class KeyStore:
                 ("aud_" + uuid.uuid4().hex[:16], org_id, actor[:100], action[:100], target[:200], time.time(), json.dumps(metadata, separators=(",", ":"))),
             )
 
-    def list_audit(
-        self,
+    @staticmethod
+    def _audit_event(row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "org_id": row["org_id"],
+            "actor": row["actor"],
+            "action": row["action"],
+            "target": row["target"],
+            "timestamp": row["timestamp"],
+            "metadata": json.loads(row["metadata"]),
+        }
+
+    @staticmethod
+    def _audit_query(
         org_id: str,
-        limit: int = 10_000,
-        *,
         action: str | None = None,
         actor: str | None = None,
         target: str | None = None,
         since: float | None = None,
         until: float | None = None,
-    ) -> list[dict]:
-        limit = max(1, min(int(limit), 10_000))
+    ) -> tuple[list[str], list[object]]:
         clauses = ["org_id=?"]
         parameters: list[object] = [org_id]
         for column, value in (("action", action), ("actor", actor), ("target", target)):
@@ -225,6 +237,21 @@ class KeyStore:
         if until is not None:
             clauses.append("timestamp<=?")
             parameters.append(float(until))
+        return clauses, parameters
+
+    def list_audit(
+        self,
+        org_id: str,
+        limit: int = 10_000,
+        *,
+        action: str | None = None,
+        actor: str | None = None,
+        target: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> list[dict]:
+        limit = max(1, min(int(limit), 10_000))
+        clauses, parameters = self._audit_query(org_id, action, actor, target, since, until)
         parameters.append(limit)
         with self._connect() as connection:
             rows = connection.execute(
@@ -232,18 +259,32 @@ class KeyStore:
                 f"WHERE {' AND '.join(clauses)} ORDER BY timestamp DESC, id DESC LIMIT ?",
                 parameters,
             ).fetchall()
-        return [
-            {
-                "id": row["id"],
-                "org_id": row["org_id"],
-                "actor": row["actor"],
-                "action": row["action"],
-                "target": row["target"],
-                "timestamp": row["timestamp"],
-                "metadata": json.loads(row["metadata"]),
-            }
-            for row in rows
-        ]
+        return [self._audit_event(row) for row in rows]
+
+    def list_audit_page(
+        self,
+        org_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        action: str | None = None,
+        actor: str | None = None,
+        target: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> tuple[list[dict], bool]:
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, int(offset))
+        clauses, parameters = self._audit_query(org_id, action, actor, target, since, until)
+        parameters.extend((limit + 1, offset))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, org_id, actor, action, target, timestamp, metadata FROM audit_events "
+                f"WHERE {' AND '.join(clauses)} ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?",
+                parameters,
+            ).fetchall()
+        has_more = len(rows) > limit
+        return [self._audit_event(row) for row in rows[:limit]], has_more
 
     def purge_expired_audit(self, retention_seconds: float, now: float | None = None, org_id: str | None = None) -> int:
         if retention_seconds < 0:

@@ -309,6 +309,24 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(remaining[0]["target"], "key-1")
         self.assertEqual(len(audit.list_audit("org-b")), 1)
 
+    def test_audit_page_is_bounded_and_uses_filter_index(self):
+        audit = KeyStore(Path(self.temp_dir.name) / "audit-page.sqlite3")
+        for index in range(4):
+            audit.audit("org-a", "operator", "config.changed", f"monitor-{index}", {"index": index})
+        first, has_more = audit.list_audit_page("org-a", limit=2, offset=0, action="config.changed")
+        second, second_has_more = audit.list_audit_page("org-a", limit=2, offset=2, action="config.changed")
+        self.assertEqual(len(first), 2)
+        self.assertTrue(has_more)
+        self.assertEqual(len(second), 2)
+        self.assertFalse(second_has_more)
+        self.assertEqual({event["id"] for event in first}.isdisjoint(event["id"] for event in second), True)
+        with sqlite3.connect(audit.path) as connection:
+            plan = connection.execute(
+                "EXPLAIN QUERY PLAN SELECT id FROM audit_events WHERE org_id=? AND action=? ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?",
+                ("org-a", "config.changed", 2, 0),
+            ).fetchall()
+        self.assertTrue(any("idx_audit_org_action_time" in str(row) for row in plan), plan)
+
     def test_durable_metrics_persist_filter_and_purge_by_organization(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "metrics.sqlite3"
