@@ -1139,12 +1139,91 @@ components:
           type: array
           items:
             type: string
+    PlanSummary:
+      type: object
+      required: [id, intent, estimated_mode, steps, routed_tools]
+      properties:
+        id:
+          type: string
+        intent:
+          type: string
+          enum: [lookup, comparison, monitoring, longitudinal]
+        estimated_mode:
+          $ref: '#/components/schemas/Mode'
+        skill:
+          type: string
+          nullable: true
+        steps:
+          type: array
+          items:
+            type: object
+            required: [type]
+            properties:
+              type:
+                type: string
+        routed_tools:
+          type: array
+          items:
+            type: string
+    SelectionLogic:
+      type: object
+      required: [source_strategy, memory_reuse_window_seconds, ranker, source_limit]
+      properties:
+        source_strategy:
+          type: string
+        memory_reuse_window_seconds:
+          type: integer
+          minimum: 0
+        ranker:
+          type: string
+        source_limit:
+          type: integer
+          minimum: 1
+    ExecutionAction:
+      type: object
+      required: [tool, operation, status]
+      properties:
+        tool:
+          type: string
+        operation:
+          type: string
+        status:
+          type: string
+        call_count:
+          type: integer
+        result_count:
+          type: integer
+        candidate_count:
+          type: integer
+        included_count:
+          type: integer
+        source_id:
+          type: string
+          nullable: true
+        selected_source_ids:
+          type: array
+          items:
+            type: string
+        citation_count:
+          type: integer
+        evidence_score:
+          type: number
+          minimum: 0
+          maximum: 1
     SolveResponse:
       type: object
       required: [execution_id, mode, answer, sources, citations, created_at, insufficient_evidence, output_format, evidence_score, conflicts, structured_output]
       properties:
         _meta:
           $ref: '#/components/schemas/ResponseMetadata'
+        plan:
+          $ref: '#/components/schemas/PlanSummary'
+        selection_logic:
+          $ref: '#/components/schemas/SelectionLogic'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutionAction'
         execution_id:
           type: string
         mode:

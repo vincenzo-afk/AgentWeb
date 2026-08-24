@@ -40,6 +40,16 @@ The metadata is additive rather than a wrapper: AgentWeb does not move existing 
 }
 ```
 
+## Execution transparency
+
+`solve` responses include three additive, secret-safe fields:
+
+- `plan` — the plan identifier, classified intent, estimated mode, matched generic skill name when applicable, step types, and routed tool names. Step parameters and task content are intentionally omitted.
+- `selection_logic` — the source strategy, memory-reuse window, ranker name, and bounded source limit used for the run.
+- `actions` — bounded summaries of router, memory/extraction, search, ranking, and synthesis actions, including status, counts, selected source IDs, citation count, and evidence score where applicable. Credentials, cookies, authorization values, raw task inputs, and page content are never included.
+
+These fields summarize the run without replacing the persisted organization-scoped trace available through `/report/{execution_id}`.
+
 ## Consistency rules
 
 Every field present in a successful response must be non-null; optional data that was not gathered should be omitted rather than returned as `null`, except where an endpoint contract explicitly uses nullable values. Successful JSON object responses include `_meta`; `204 No Content` responses have no body and therefore no `_meta` object. Errors retain the stable `{ "error": { "type", "message", "request_id" } }` shape and do not include success metadata.

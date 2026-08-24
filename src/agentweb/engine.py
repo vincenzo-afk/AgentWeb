@@ -87,6 +87,17 @@ class AgentWebEngine:
         return "src_" + uuid.uuid5(uuid.NAMESPACE_URL, url).hex[:12]
 
     @staticmethod
+    def _plan_summary(plan, tool_calls: list) -> dict[str, object]:
+        return {
+            "id": plan.id,
+            "intent": plan.intent,
+            "estimated_mode": plan.estimated_mode,
+            "skill": plan.skill,
+            "steps": [{"type": step.type} for step in plan.steps],
+            "routed_tools": [call.tool for call in tool_calls],
+        }
+
+    @staticmethod
     def _structured_projection(parsed: object, text: str) -> dict[str, object]:
         return {
             "title": getattr(parsed, "title", ""),
@@ -297,6 +308,7 @@ class AgentWebEngine:
             )
         )
         source_candidates: list[Source] = []
+        actions: list[dict[str, object]] = [{"tool": "router", "operation": "route", "status": "complete", "call_count": len(tool_calls)}]
         reuse_hits = 0
         for url in requested_urls[:5 if mode == "dive" else 3]:
             fetch_started = time.time()
@@ -315,6 +327,14 @@ class AgentWebEngine:
             )
             if source:
                 source_candidates.append(source)
+            actions.append(
+                {
+                    "tool": "memory" if cached else "extractor",
+                    "operation": "reuse_snapshot" if cached else "fetch_and_parse",
+                    "status": "reused" if cached and source else "complete" if source else "degraded",
+                    "source_id": source.id if source else None,
+                }
+            )
 
         if not source_candidates and any(call.tool == "search" for call in tool_calls):
             search_started = time.time()
@@ -323,6 +343,7 @@ class AgentWebEngine:
             search_freshness = search_call.params.get("freshness")
             search_results = search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider)
             spans.append(self._span("search", "search", search_started, "complete", task, f"{len(search_results)} result(s)"))
+            actions.append({"tool": "search", "operation": "search", "status": "complete", "result_count": len(search_results)})
             for item in search_results:
                 source_candidates.append(
                     Source(
@@ -339,7 +360,18 @@ class AgentWebEngine:
         ranked = rank(source_candidates, task)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
         limit = 1 if mode == "flash" else 3 if mode == "focus" else 5
-        synthesis_result = synthesize([item for item in ranked if item.include][:limit], task, synthesis_format)
+        selected = [item for item in ranked if item.include][:limit]
+        actions.append(
+            {
+                "tool": "ranking",
+                "operation": "rank_sources",
+                "status": "complete",
+                "candidate_count": len(source_candidates),
+                "included_count": len(selected),
+                "selected_source_ids": [item.source.id for item in selected],
+            }
+        )
+        synthesis_result = synthesize(selected, task, synthesis_format)
         spans.append(
             self._span(
                 "synthesis",
@@ -349,6 +381,15 @@ class AgentWebEngine:
                 task,
                 f"{len(synthesis_result.citations)} citation(s); evidence={synthesis_result.evidence_score:.2f}",
             )
+        )
+        actions.append(
+            {
+                "tool": "synthesis",
+                "operation": "synthesize",
+                "status": "complete",
+                "citation_count": len(synthesis_result.citations),
+                "evidence_score": synthesis_result.evidence_score,
+            }
         )
         self.traces.save(execution_id, spans, org_id=org_id)
         self.memory.record_usage(org_id, mode)
@@ -365,6 +406,14 @@ class AgentWebEngine:
             evidence_score=synthesis_result.evidence_score,
             conflicts=synthesis_result.conflicts or [],
             structured_output=synthesis_result.structured_output or {},
+            plan=self._plan_summary(plan, tool_calls),
+            selection_logic={
+                "source_strategy": "direct_url_reuse_then_fetch" if requested_urls else "provider_search",
+                "memory_reuse_window_seconds": self._reuse_window(task),
+                "ranker": "trust_relevance_corroboration_recency_content_type_extraction_confidence",
+                "source_limit": limit,
+            },
+            actions=actions,
         )
 
     def run_retention(self, payload: dict) -> dict:

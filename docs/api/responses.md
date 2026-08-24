@@ -39,6 +39,26 @@ The solve response remains an endpoint-specific standard payload with additive m
     { "url": "https://...", "trust_score": 0.87, "cited": true }
   ],
   "created_at": "2026-07-31T12:00:00Z",
+  "plan": {
+    "id": "plan_abc123",
+    "intent": "comparison",
+    "estimated_mode": "dive",
+    "skill": "comparison",
+    "steps": [{"type": "search"}, {"type": "extract"}, {"type": "rank"}, {"type": "synthesize"}],
+    "routed_tools": ["search", "extract", "rank", "synthesize"]
+  },
+  "selection_logic": {
+    "source_strategy": "provider_search",
+    "memory_reuse_window_seconds": 86400,
+    "ranker": "trust_relevance_corroboration_recency_content_type_extraction_confidence",
+    "source_limit": 5
+  },
+  "actions": [
+    {"tool": "router", "operation": "route", "status": "complete", "call_count": 4},
+    {"tool": "search", "operation": "search", "status": "complete", "result_count": 5},
+    {"tool": "ranking", "operation": "rank_sources", "status": "complete", "candidate_count": 5, "included_count": 3, "selected_source_ids": ["src_a"]},
+    {"tool": "synthesis", "operation": "synthesize", "status": "complete", "citation_count": 2, "evidence_score": 0.82}
+  ],
   "_meta": {
     "request_id": "req_abc123",
     "api_version": "v1",
@@ -51,6 +71,9 @@ The solve response remains an endpoint-specific standard payload with additive m
 ## Fields
 
 - `_meta` — additive request and API metadata; it is reserved by AgentWeb and is not a replacement for endpoint fields.
+- `plan` — sanitized plan identity, intent, mode estimate, matched skill, step types, and routed tool names; task parameters are omitted.
+- `selection_logic` — source strategy, memory reuse window, ranker, and source limit used for the run.
+- `actions` — bounded router, memory/extraction, search, ranking, and synthesis summaries with statuses, counts, selected source IDs, and evidence metrics; secrets and raw page/task content are omitted.
 - `execution_id` — unique identifier for the run; use with [`/report`](reference/admin.md) to inspect the execution graph.
 - `mode` — the retrieval mode actually used.
 - `answer` — synthesized, cited output (present for `solve`).

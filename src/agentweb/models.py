@@ -52,6 +52,9 @@ class SolveResponse:
     evidence_score: float = 0.0
     conflicts: list[dict[str, Any]] = field(default_factory=list)
     structured_output: dict[str, Any] = field(default_factory=dict)
+    plan: dict[str, Any] = field(default_factory=dict)
+    selection_logic: dict[str, Any] = field(default_factory=dict)
+    actions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return _omit_none(asdict(self))

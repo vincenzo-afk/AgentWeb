@@ -347,6 +347,24 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(response.output_format, "comparison")
         self.assertTrue(response.citations)
 
+    def test_solve_exposes_secret_safe_execution_transparency(self):
+        response = self.engine.solve(f"Summarize {self.url}")
+        payload = response.to_dict()
+        self.assertEqual(payload["plan"]["intent"], "lookup")
+        self.assertEqual(payload["plan"]["skill"], "source_summary")
+        self.assertEqual([step["type"] for step in payload["plan"]["steps"]], ["extract", "search", "rank", "synthesize"])
+        self.assertEqual(payload["selection_logic"]["source_strategy"], "direct_url_reuse_then_fetch")
+        self.assertEqual(payload["selection_logic"]["source_limit"], 3)
+        self.assertTrue(any(action["tool"] == "extractor" for action in payload["actions"]))
+        self.assertTrue(any(action["tool"] == "ranking" and action["selected_source_ids"] for action in payload["actions"]))
+        self.assertTrue(any(action["tool"] == "synthesis" for action in payload["actions"]))
+        serialized = json.dumps(payload)
+        self.assertNotIn("task received", serialized)
+        self.assertNotIn("inputs", serialized)
+
+        reused = self.engine.solve(f"Summarize {self.url}")
+        self.assertTrue(any(action["tool"] == "memory" and action["status"] == "reused" for action in reused.actions))
+
     def test_solve_records_explicit_planner_skill_span(self):
         response = self.engine.solve(f"Summarize {self.url}")
         trace = self.engine.traces.get(response.execution_id)
