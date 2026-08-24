@@ -42,7 +42,8 @@ from agentweb.redaction import redact_text
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
-    body = b"<html><head><title>Fixture</title><meta name='description' content='A fixture page'></head><body><h1>Hello</h1><p>AgentWeb test content.</p><a href='/next'>Next</a></body></html>"
+    default_body = b"<html><head><title>Fixture</title><meta name='description' content='A fixture page'></head><body><h1>Hello</h1><p>AgentWeb test content.</p><a href='/next'>Next</a></body></html>"
+    body = default_body
 
     def do_GET(self):  # noqa: N802
         self.send_response(200)
@@ -54,12 +55,30 @@ class FixtureHandler(BaseHTTPRequestHandler):
         pass
 
 
+def start_test_server(server: ThreadingHTTPServer) -> threading.Thread:
+    server.daemon_threads = False
+    server.block_on_close = True
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": 0.01},
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def stop_test_server(server: ThreadingHTTPServer, thread: threading.Thread) -> None:
+    server.shutdown()
+    thread.join(timeout=1.0)
+    server.server_close()
+
+
 class AgentWebTests(unittest.TestCase):
     def setUp(self):
         os.environ["AGENTWEB_ALLOW_PRIVATE_TARGETS"] = "1"
+        FixtureHandler.body = FixtureHandler.default_body
         self.fixture = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
-        self.thread = threading.Thread(target=self.fixture.serve_forever, daemon=True)
-        self.thread.start()
+        self.thread = start_test_server(self.fixture)
         self.url = f"http://127.0.0.1:{self.fixture.server_port}/fixture"
         self.temp_dir = tempfile.TemporaryDirectory()
         self.store = MemoryStore(Path(self.temp_dir.name) / "test.sqlite3")
@@ -78,8 +97,8 @@ class AgentWebTests(unittest.TestCase):
         os.environ.pop("AGENTWEB_SEARCH_API_KEY", None)
         os.environ.pop("AGENTWEB_SEARCH_TIMEOUT_SECONDS", None)
         os.environ.pop("AGENTWEB_BROWSER_CREDENTIAL_KEY", None)
-        self.fixture.shutdown()
-        self.fixture.server_close()
+        FixtureHandler.body = FixtureHandler.default_body
+        stop_test_server(self.fixture, self.thread)
         self.temp_dir.cleanup()
 
     def test_html_to_text_removes_scripts(self):
@@ -675,21 +694,18 @@ class AgentWebTests(unittest.TestCase):
 
     def test_health_and_report_endpoints(self):
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "api.sqlite3"))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             with urlopen(Request(f"http://127.0.0.1:{server.server_port}/health")) as response:
                 self.assertEqual(response.status, 200)
                 payload = json.loads(response.read())
             self.assertEqual(payload["status"], "ok")
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_crawl_route_returns_bounded_pages(self):
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "crawl.sqlite3"))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             body = json.dumps({"start_url": self.url, "max_pages": 2, "depth": 1}).encode()
             request = Request(
@@ -703,8 +719,7 @@ class AgentWebTests(unittest.TestCase):
             self.assertEqual(payload["pages_crawled"], 2)
             self.assertFalse(payload["truncated"])
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_browser_credentials_are_metadata_only_and_revocable(self):
         original = FixtureHandler.body
@@ -715,8 +730,7 @@ class AgentWebTests(unittest.TestCase):
         server = create_server("127.0.0.1", 0, str(data_path))
         admin_a = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
         admin_b = server.authenticator.key_store.create_key("org-b", ["admin:*"])['secret']
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             headers = {"Authorization": f"Bearer {admin_a}", "Content-Type": "application/json"}
             body = json.dumps({"label": "fixture", "username": "alice@example.com", "secret": "password-123"}).encode()
@@ -746,14 +760,12 @@ class AgentWebTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, 404)
         finally:
             FixtureHandler.body = original
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_browser_route_returns_rendered_session(self):
         os.environ["AGENTWEB_CHROMIUM_PATH"] = "/usr/bin/chromium"
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "browser.sqlite3"))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             body = json.dumps({"url": self.url, "actions": [{"type": "extract", "selector": "h1"}]}).encode()
             request = Request(
@@ -767,16 +779,14 @@ class AgentWebTests(unittest.TestCase):
             self.assertEqual(payload["status"], "complete")
             self.assertEqual(payload["extracted"][0]["text"], "Hello")
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_tenant_isolation_hides_monitor_and_trace_from_other_org(self):
         data_path = Path(self.temp_dir.name) / "tenants.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         admin_a = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
         admin_b = server.authenticator.key_store.create_key("org-b", ["admin:*"])["secret"]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             monitor_body = json.dumps({"task": f"Watch {self.url}", "frequency": "daily"}).encode()
             request = Request(
@@ -802,8 +812,7 @@ class AgentWebTests(unittest.TestCase):
             self.assertTrue(any(event["action"] == "api_key.created" for event in response))
             self.assertFalse(any(admin_a in json.dumps(event) for event in response))
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_audit_filters_pagination_and_time_validation(self):
         data_path = Path(self.temp_dir.name) / "audit-api.sqlite3"
@@ -812,8 +821,7 @@ class AgentWebTests(unittest.TestCase):
         server.authenticator.key_store.audit("org-a", "operator", "config.changed", "monitor-1", {"version": 1})
         server.authenticator.key_store.audit("org-a", "operator", "config.changed", "monitor-2", {"version": 2})
         server.authenticator.key_store.audit("org-b", "operator", "config.changed", "monitor-3", {"version": 3})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             headers = {"Authorization": f"Bearer {admin}"}
             base = f"http://127.0.0.1:{server.server_port}/admin/audit?action=config.changed&actor=operator&limit=1"
@@ -835,15 +843,13 @@ class AgentWebTests(unittest.TestCase):
                     urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/audit?{query}", headers=headers))
                 self.assertEqual(raised.exception.code, 400)
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_persistent_keys_are_hashed_and_admin_listing_is_redacted(self):
         data_path = Path(self.temp_dir.name) / "keys.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         root = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             body = json.dumps({"scopes": ["search:read"]}).encode()
             request = Request(
@@ -867,16 +873,14 @@ class AgentWebTests(unittest.TestCase):
             self.assertNotEqual(stored, created["secret"])
             self.assertNotIn(created["secret"], stored)
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_admin_revocation_is_organization_scoped_and_invalidates_key(self):
         data_path = Path(self.temp_dir.name) / "revoke.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
         other = server.authenticator.key_store.create_key("org-b", ["search:read"])
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             revoke_other = Request(
                 f"http://127.0.0.1:{server.server_port}/admin/keys/{other['id']}",
@@ -902,15 +906,13 @@ class AgentWebTests(unittest.TestCase):
                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {own['secret']}"},
                 ))
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_idempotency_replays_and_conflicts(self):
         data_path = Path(self.temp_dir.name) / "idempotency.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             body = json.dumps({"task": f"Summarize {self.url}", "mode": "flash", "idempotency_key": "solve-1"}).encode()
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {admin}"}
@@ -924,15 +926,13 @@ class AgentWebTests(unittest.TestCase):
                 urlopen(Request(f"http://127.0.0.1:{server.server_port}/solve", data=conflict_body, method="POST", headers=headers))
             self.assertIn("409", str(context.exception))
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_rate_limit_headers_and_data_deletion(self):
         data_path = Path(self.temp_dir.name) / "headers.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             headers = {"Authorization": f"Bearer {admin}", "Content-Type": "application/json"}
             with urlopen(Request(f"http://127.0.0.1:{server.server_port}/admin/usage", headers=headers)) as response:
@@ -952,8 +952,7 @@ class AgentWebTests(unittest.TestCase):
             self.assertEqual(deleted["deleted_traces"], 1)
             self.assertIsNone(server.engine.traces.get(trace.execution_id, "org-a"))
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_admin_metrics_are_tenant_filtered(self):
         data_path = Path(self.temp_dir.name) / "metrics-api.sqlite3"
@@ -962,8 +961,7 @@ class AgentWebTests(unittest.TestCase):
         server.authenticator.key_store.create_key("org-b", ["admin:*"])
         server.engine.metrics.increment("tenant_probe", labels={"org_id": "org-a"})
         server.engine.metrics.increment("tenant_probe", labels={"org_id": "org-b"})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             request = Request(f"http://127.0.0.1:{server.server_port}/admin/metrics", headers={"Authorization": f"Bearer {admin_a}"})
             with urlopen(request) as response:
@@ -974,15 +972,13 @@ class AgentWebTests(unittest.TestCase):
             self.assertIn("tenant_probe{org_id=org-a}", metrics["counters"])
             self.assertNotIn("tenant_probe{org_id=org-b}", metrics["counters"])
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_usage_and_cursor_paginated_monitors(self):
         data_path = Path(self.temp_dir.name) / "usage.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])["secret"]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {admin}"}
             for suffix in ("/one", "/two"):
@@ -1009,15 +1005,13 @@ class AgentWebTests(unittest.TestCase):
                 urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe?cursor=not-valid", headers=headers))
             self.assertIn("400", str(cursor_error.exception))
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_monitor_change_policy_persists_and_validates(self):
         data_path = Path(self.temp_dir.name) / "monitor-policy.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         admin = server.authenticator.key_store.create_key("org-a", ["admin:*"])['secret']
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {admin}"}
             body = json.dumps({
@@ -1039,15 +1033,13 @@ class AgentWebTests(unittest.TestCase):
                     urlopen(Request(f"http://127.0.0.1:{server.server_port}/observe", data=invalid_body, method="POST", headers=headers))
                 self.assertEqual(raised.exception.code, 400)
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_http_error_boundary_redacts_credential_bearing_urls(self):
         data_path = Path(self.temp_dir.name) / "error-redaction.sqlite3"
         server = create_server("127.0.0.1", 0, str(data_path))
         key = server.authenticator.key_store.create_key("org-a", ["extract:read"])['secret']
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             body = json.dumps({"url": "https://user:secret@example.test/path"}).encode()
             request = Request(f"http://127.0.0.1:{server.server_port}/extract", data=body, method="POST", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
@@ -1055,8 +1047,7 @@ class AgentWebTests(unittest.TestCase):
                 urlopen(request)
             self.assertNotIn("secret", raised.exception.read().decode())
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
     def test_browser_worker_pool_rejects_capacity_overflow(self):
         browser = BrowserEngine(max_workers=1, session_timeout=0.01)
@@ -1068,8 +1059,7 @@ class AgentWebTests(unittest.TestCase):
     def test_http_scope_auth_rejects_missing_scope(self):
         os.environ["AGENTWEB_API_KEYS"] = json.dumps({"search-only": ["search:read"]})
         server = create_server("127.0.0.1", 0, str(Path(self.temp_dir.name) / "auth.sqlite3"))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        thread = start_test_server(server)
         try:
             body = b'{"task":"test"}'
             request = Request(
@@ -1082,8 +1072,7 @@ class AgentWebTests(unittest.TestCase):
                 urlopen(request)
             self.assertIn("403", str(context.exception))
         finally:
-            server.shutdown()
-            server.server_close()
+            stop_test_server(server, thread)
 
 
 if __name__ == "__main__":
