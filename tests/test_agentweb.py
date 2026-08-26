@@ -13,6 +13,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 from agentweb.alerting import DeliveryResult, signature
@@ -33,7 +34,7 @@ from agentweb.metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from agentweb.migrations import _prepare_row, export_sqlite_relational
 from agentweb.rdbms import DatabaseConfig, DatabaseConfigurationError, POSTGRES_SCHEMA, PostgresDistributedQueue, open_distributed_queue
 from agentweb.trace import Span
-from agentweb.search import JsonSearchProvider, SearchProviderConfig, search
+from agentweb.search import DuckDuckGoHTMLProvider, FallbackSearchProvider, GitHubRepositorySearchProvider, JsonSearchProvider, SearchProviderConfig, SearchProviderError, search
 from agentweb.scheduler import Scheduler
 from agentweb.synthesis import synthesize
 from agentweb.secrets import MappingSecretProvider, SecretProviderConfig, SecretProviderError
@@ -244,6 +245,82 @@ class AgentWebTests(unittest.TestCase):
         self.assertIn("freshness=week", captured["url"])
         self.assertEqual(captured["authorization"], "Bearer test-secret")
         self.assertEqual(captured["timeout"], 7.0)
+
+    def test_duckduckgo_bot_challenge_raises_provider_error_without_bypass_attempt(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _limit):
+                return b"<html><form action='//duckduckgo.com/anomaly.js'>Unfortunately, bots use DuckDuckGo too.</form></html>"
+
+        with patch("agentweb.search.urlopen", lambda *_args, **_kwargs: FakeResponse()):
+            with self.assertRaisesRegex(SearchProviderError, "blocked"):
+                DuckDuckGoHTMLProvider().search("technical query")
+
+    def test_empty_or_blocked_primary_uses_bounded_github_repository_fallback(self):
+        class EmptyPrimary:
+            def search(self, *_args, **_kwargs):
+                return []
+
+        class GitHubFallback:
+            def search(self, query, limit=10, freshness=None):
+                self.call = (query, limit, freshness)
+                return [{"url": "https://github.com/example/project", "title": "example/project", "snippet": "technical source"}]
+
+        fallback = GitHubFallback()
+        results = FallbackSearchProvider(EmptyPrimary(), fallback).search("git tooling", 3, "week")
+        self.assertEqual(results[0]["url"], "https://github.com/example/project")
+        self.assertEqual(fallback.call, ("git tooling", 3, "week"))
+
+    def test_github_repository_fallback_normalizes_public_repository_results(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps({"items": [{"full_name": "org/tool", "html_url": "https://github.com/org/tool", "description": "A tool", "language": "Rust", "stargazers_count": 42, "updated_at": "2026-08-26T00:00:00Z"}]}).encode()
+
+        with patch("agentweb.search.urlopen", lambda *_args, **_kwargs: FakeResponse()):
+            results = GitHubRepositorySearchProvider().search("rust git tool", 2)
+        self.assertEqual(results[0]["title"], "org/tool")
+        self.assertIn("language: Rust", results[0]["snippet"])
+        self.assertEqual(results[0]["published_at"], "2026-08-26T00:00:00Z")
+
+    def test_github_repository_fallback_relaxes_an_overly_specific_technical_query(self):
+        responses = [
+            {"items": []},
+            {"items": [{"full_name": "github/github-mcp-server", "html_url": "https://github.com/github/github-mcp-server", "description": "MCP server"}]},
+        ]
+        requested_queries = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps(self.payload).encode()
+
+        def fake_urlopen(request, **_kwargs):
+            requested_queries.append(parse_qs(urlparse(request.full_url).query)["q"][0])
+            return FakeResponse(responses.pop(0))
+
+        with patch("agentweb.search.urlopen", fake_urlopen):
+            results = GitHubRepositorySearchProvider().search("AI-native Git tooling MCP trends", 3)
+        self.assertEqual(results[0]["title"], "github/github-mcp-server")
+        self.assertEqual(requested_queries[:2], ["AI-native Git tooling MCP trends", "git mcp"])
 
     def test_search_provider_configuration_requires_endpoint_for_json_provider(self):
         os.environ["AGENTWEB_SEARCH_PROVIDER"] = "json"

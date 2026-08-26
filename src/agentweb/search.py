@@ -84,6 +84,10 @@ class DuckDuckGoHTMLProvider:
         except Exception as error:
             raise SearchProviderError(f"DuckDuckGo provider unavailable: {type(error).__name__}") from error
 
+        lowered_body = body.lower()
+        if "anomaly.js" in lowered_body or "bots use duckduckgo too" in lowered_body:
+            raise SearchProviderError("DuckDuckGo provider blocked the automated request")
+
         results: list[dict[str, str]] = []
         pattern = re.compile(
             r'(?is)<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\'](.*?)["\'][^>]*>(.*?)</a>'
@@ -103,6 +107,63 @@ class DuckDuckGoHTMLProvider:
             if len(results) >= limit:
                 break
         return results
+
+
+class GitHubRepositorySearchProvider:
+    """Bounded public-repository fallback for technical queries when general web search is unavailable."""
+
+    endpoint = "https://api.github.com/search/repositories"
+
+    def __init__(self, timeout: float = 10.0) -> None:
+        self.timeout = timeout
+
+    def search(self, query: str, limit: int = 10, freshness: str | None = None) -> list[dict[str, str]]:
+        query, limit, _ = _validate_query(query, limit, freshness)
+        queries = [query]
+        keywords = re.findall(r"[a-z0-9][a-z0-9+.#/-]*", query.lower())
+        preferred = [term for term in keywords if term in {"mcp", "git", "git2-rs", "gitoxide", "rust", "python", "javascript", "typescript"}]
+        if len(preferred) >= 2:
+            queries.append(" ".join(preferred[:3]))
+        non_generic = [term for term in keywords if term not in {"alternative", "alternatives", "and", "for", "from", "how", "native", "the", "to", "tool", "tooling", "trend", "trends", "with"}]
+        if len(non_generic) >= 2:
+            queries.append(" ".join(non_generic[:3]))
+
+        for candidate in dict.fromkeys(queries):
+            request = Request(
+                self.endpoint + "?" + urlencode({"q": candidate, "per_page": str(min(limit, 10))}),
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "AgentWeb/0.8",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+            try:
+                with urlopen(request, timeout=self.timeout) as response:
+                    payload = json.loads(response.read(2_000_000).decode("utf-8"))
+            except Exception as error:
+                raise SearchProviderError(f"GitHub repository fallback unavailable: {type(error).__name__}") from error
+            items = payload.get("items") if isinstance(payload, dict) else None
+            if not isinstance(items, list):
+                raise SearchProviderError("GitHub repository fallback returned an invalid result list")
+            results: list[dict[str, str]] = []
+            for item in items[:limit]:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("html_url")
+                if not isinstance(url, str) or not url.startswith("https://github.com/"):
+                    continue
+                name = str(item.get("full_name") or item.get("name") or "GitHub repository")
+                description = str(item.get("description") or "")
+                language = str(item.get("language") or "")
+                stars = item.get("stargazers_count")
+                details = "; ".join(part for part in (description, f"language: {language}" if language else "", f"stars: {stars}" if isinstance(stars, int) else "") if part)
+                result = {"url": url, "title": name, "snippet": details}
+                if item.get("updated_at"):
+                    result["published_at"] = str(item["updated_at"])
+                results.append(result)
+            if results:
+                return results
+        return []
 
 
 class JsonSearchProvider:
@@ -163,23 +224,27 @@ class FallbackSearchProvider:
 
     def search(self, query: str, limit: int = 10, freshness: str | None = None) -> list[dict[str, str]]:
         try:
-            return self.primary.search(query, limit, freshness)
+            results = self.primary.search(query, limit, freshness)
         except SearchProviderError:
-            if isinstance(self.primary, DuckDuckGoHTMLProvider):
-                return []
-            try:
-                return self.fallback.search(query, limit, freshness)
-            except SearchProviderError:
-                return []
+            results = []
+        if results:
+            return results
+        try:
+            return self.fallback.search(query, limit, freshness)
+        except SearchProviderError:
+            return []
 
 
 def build_search_provider(secret_provider: SecretProvider | None = None) -> SearchProvider:
     config = SearchProviderConfig.from_environment()
     if config.name == "duckduckgo":
-        return DuckDuckGoHTMLProvider(config.timeout)
+        return FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout))
     secret_provider = secret_provider or build_provider()
     api_key = secret_provider.get(config.api_key_name, required=False)
-    return FallbackSearchProvider(JsonSearchProvider(config.endpoint or "", api_key, config.timeout))
+    return FallbackSearchProvider(
+        JsonSearchProvider(config.endpoint or "", api_key, config.timeout),
+        FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout)),
+    )
 
 
 def search(query: str, limit: int = 10, freshness: str | None = None, provider: SearchProvider | None = None) -> list[dict[str, str]]:
