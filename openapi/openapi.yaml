@@ -1033,7 +1033,7 @@ components:
           default: monitor.change_detected
         mode:
           type: string
-          enum: [flash, focus, dive]
+          enum: [flash, focus, dive, monitor]
           default: focus
     WorkflowControlInput:
       type: object
@@ -1208,7 +1208,7 @@ components:
             enum: [ok, failed, disabled]
     SolveMode:
       type: string
-      enum: [flash, focus, dive]
+      enum: [flash, focus, dive, monitor]
     Mode:
       type: string
       enum: [flash, focus, dive, monitor]

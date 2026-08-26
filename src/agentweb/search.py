@@ -110,8 +110,9 @@ class DuckDuckGoHTMLProvider:
 
 
 class GitHubRepositorySearchProvider:
-    """Bounded public-repository fallback for technical queries when general web search is unavailable."""
+    """Bounded public-repository search branch for technical queries."""
 
+    name = "github_api"
     endpoint = "https://api.github.com/search/repositories"
 
     def __init__(self, timeout: float = 10.0) -> None:
@@ -238,17 +239,23 @@ class FallbackSearchProvider:
 def build_search_provider(secret_provider: SecretProvider | None = None) -> SearchProvider:
     config = SearchProviderConfig.from_environment()
     if config.name == "duckduckgo":
-        return FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout))
-    secret_provider = secret_provider or build_provider()
-    api_key = secret_provider.get(config.api_key_name, required=False)
-    return FallbackSearchProvider(
-        JsonSearchProvider(config.endpoint or "", api_key, config.timeout),
-        FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout)),
-    )
+        primary = FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout))
+    else:
+        secret_provider = secret_provider or build_provider()
+        api_key = secret_provider.get(config.api_key_name, required=False)
+        primary = FallbackSearchProvider(
+            JsonSearchProvider(config.endpoint or "", api_key, config.timeout),
+            FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout)),
+        )
+    from .mode_connectors import build_mode_search_provider
+    return build_mode_search_provider(primary)
 
 
-def search(query: str, limit: int = 10, freshness: str | None = None, provider: SearchProvider | None = None) -> list[dict[str, str]]:
-    """Return normalized provider results, falling back to the free local adapter."""
+def search(query: str, limit: int = 10, freshness: str | None = None, provider: SearchProvider | None = None, *, mode: str = "focus", query_count: int | None = None) -> list[dict[str, str]]:
+    """Return normalized results; mode-aware providers fan out semantic queries in parallel."""
     if provider is None:
         provider = build_search_provider()
+    if query_count is not None and hasattr(provider, "search_many"):
+        from .mode_connectors import semantic_queries
+        return provider.search_many(semantic_queries(query, query_count), mode=mode, limit=limit, freshness=freshness)  # type: ignore[attr-defined]
     return provider.search(query, limit, freshness)

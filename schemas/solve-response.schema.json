@@ -19,7 +19,7 @@
       "properties": {
         "id": { "type": "string" },
         "intent": { "type": "string", "enum": ["lookup", "comparison", "monitoring", "longitudinal"] },
-        "estimated_mode": { "type": "string", "enum": ["flash", "focus", "dive"] },
+        "estimated_mode": { "type": "string", "enum": ["flash", "focus", "dive", "monitor"] },
         "skill": { "type": ["string", "null"] },
         "steps": { "type": "array", "items": { "type": "object", "required": ["type"], "properties": { "type": { "type": "string" } } } },
         "routed_tools": { "type": "array", "items": { "type": "string" } }
@@ -59,7 +59,7 @@
     "selection_logic": { "$ref": "#/definitions/SelectionLogic" },
     "actions": { "type": "array", "items": { "$ref": "#/definitions/ExecutionAction" } },
     "execution_id": { "type": "string" },
-    "mode": { "type": "string", "enum": ["flash", "focus", "dive"] },
+    "mode": { "type": "string", "enum": ["flash", "focus", "dive", "monitor"] },
     "answer": { "type": "string" },
     "sources": {
       "type": "array",

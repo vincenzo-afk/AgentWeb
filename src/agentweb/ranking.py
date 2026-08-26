@@ -17,8 +17,16 @@ class RankedSource:
     include: bool = True
 
 
+_QUESTION_STOPWORDS = {
+    "what", "which", "who", "when", "where", "why", "how", "the", "this", "that", "with",
+    "from", "into", "about", "does", "do", "can", "could", "should", "would", "will", "have",
+    "has", "been", "being", "are", "was", "were", "is", "of", "for", "and", "or", "to", "in",
+    "on", "at", "by", "an", "a", "as", "it", "its", "their", "they", "them", "versus", "vs",
+}
+
+
 def _relevance(source: Source, task_context: str) -> float:
-    terms = {term.lower() for term in task_context.split() if len(term) > 3}
+    terms = {term.lower().strip(".,?!:;()[]{}\"") for term in task_context.split() if len(term.strip(".,?!:;()[]{}\"")) > 3 and term.lower().strip(".,?!:;()[]{}\"") not in _QUESTION_STOPWORDS}
     haystack = f"{source.title} {source.snippet} {source.url}".lower()
     if not terms:
         return 0.5

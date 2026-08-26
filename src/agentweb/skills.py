@@ -53,8 +53,8 @@ class SkillRegistry:
             raise ValueError("skill name must contain between 1 and 100 characters")
         if not skill.description.strip():
             raise ValueError("skill description must not be empty")
-        if skill.default_mode not in {"flash", "focus", "dive"}:
-            raise ValueError("skill default_mode must be flash, focus, or dive")
+        if skill.default_mode not in {"flash", "focus", "dive", "monitor"}:
+            raise ValueError("skill default_mode must be flash, focus, dive, or monitor")
         if not 0.0 <= float(skill.success_rate) <= 1.0:
             raise ValueError("skill success_rate must be between 0 and 1")
         with self._lock:

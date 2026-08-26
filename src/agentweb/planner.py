@@ -126,6 +126,10 @@ class Planner:
         return "focus"
 
     @staticmethod
+    def query_count(mode: str) -> int:
+        return {"flash": 2, "focus": 4, "dive": 6, "monitor": 3}[mode]
+
+    @staticmethod
     def _requires_browser(task: str) -> bool:
         return _BROWSER_INTENT_RE.search(task.lower()) is not None
 
@@ -139,7 +143,7 @@ class Planner:
             steps.append(PlanStep(step_type, {"urls": urls[:max_sources], "max_sources": max_sources, "inputs": dict(inputs)}))
         steps.extend(
             [
-                PlanStep("search", {"limit": 5 if mode in {"focus", "dive"} else 3}),
+                PlanStep("search", {"limit": 5 if mode in {"focus", "dive", "monitor"} else 3, "query_count": Planner.query_count(mode), "include_github": True, "include_reddit": True}),
                 PlanStep("rank", {}),
                 PlanStep("synthesize", {}),
             ]
@@ -157,8 +161,8 @@ class Planner:
         if not isinstance(task, str) or not task.strip() or len(task.strip()) > 2000:
             raise ValueError("task must contain between 1 and 2000 characters")
         task = task.strip()
-        if mode is not None and mode not in {"flash", "focus", "dive"}:
-            raise ValueError("mode must be one of: flash, focus, dive")
+        if mode is not None and mode not in {"flash", "focus", "dive", "monitor"}:
+            raise ValueError("mode must be one of: flash, focus, dive, monitor")
         if inputs is not None and not isinstance(inputs, dict):
             raise ValueError("inputs must be an object")
         inputs = inputs or {}
@@ -178,8 +182,13 @@ class Planner:
             raw_steps = selected.build_steps(task, inputs)
             task_urls = list(dict.fromkeys(_URL_RE.findall(task)))[:5 if estimated_mode == "dive" else 3]
             for item in raw_steps:
+                params = item.setdefault("params", {})
+                if item["type"] == "search":
+                    params.setdefault("query_count", Planner.query_count(estimated_mode))
+                    params.setdefault("include_github", True)
+                    params.setdefault("include_reddit", True)
                 if item["type"] == "extract" and task_urls:
-                    item.setdefault("params", {})["urls"] = task_urls
+                    params["urls"] = task_urls
                     if Planner._requires_browser(task):
                         item["type"] = "browser"
             steps = tuple(PlanStep(item["type"], dict(item.get("params", {}))) for item in raw_steps)

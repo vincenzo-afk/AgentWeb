@@ -474,7 +474,10 @@ class AgentWebEngine:
             actions.append({"tool": "graph", "operation": "query", "status": "complete", "node_count": len(graph_result.nodes), "edge_count": len(graph_result.edges), "depth": int(graph_context.get("depth", 1))})
         reuse_hits = 0
         max_retrievals = 5 if mode == "dive" else 3
-        for tool, url, params in retrieval_calls[:max_retrievals]:
+        retrieval_batch = retrieval_calls[:max_retrievals]
+
+        def retrieve_one(item):
+            tool, url, params = item
             fetch_started = time.time()
             if tool == "browser":
                 interaction_inputs = params.get("inputs") if isinstance(params.get("inputs"), dict) else {}
@@ -484,59 +487,43 @@ class AgentWebEngine:
                 try:
                     session = self._open_browser_session(url, browser_actions, org_id, credential_id, session_state_id)
                     source = self._source_from_browser_session(url, session)
-
                     session_status = getattr(session, "status", "complete")
-                    spans.append(self._span("browser", "escalated_open", fetch_started, session_status, redact_url(url), f"{len(getattr(session, 'actions', []) or [])} action(s)"))
-                    actions.append(
-                        {
-                            "tool": "browser",
-                            "operation": "escalated_open",
-                            "status": session_status,
-                            "action_count": len(getattr(session, "actions", []) or []),
-                            "source_id": source.id if source else None,
-                        }
-                    )
+                    span = self._span("browser", "escalated_open", fetch_started, session_status, redact_url(url), f"{len(getattr(session, 'actions', []) or [])} action(s)")
+                    action = {"tool": "browser", "operation": "escalated_open", "status": session_status, "action_count": len(getattr(session, "actions", []) or []), "source_id": source.id if source else None}
+                    return source, span, action, False, params
                 except Exception as error:
-                    source = None
-                    spans.append(self._span("browser", "escalated_open", fetch_started, "failed", redact_url(url), redact_text(str(error))))
-                    actions.append({"tool": "browser", "operation": "escalated_open", "status": "failed"})
                     if credential_id or session_state_id:
                         raise
-            else:
-                cached = self.memory.reusable_snapshot(url, org_id, self._reuse_window(task))
-                reuse_hits += int(cached is not None)
-                source = self._source_from_snapshot(cached) if cached else self._source_from_url(url, org_id, params.get("extraction_hints"))
-                spans.append(
-                    self._span(
-                        "extractor",
-                        "reuse_snapshot" if cached else "fetch_and_parse",
-                        fetch_started,
-                        "reused" if cached and source else "complete" if source else "degraded",
-                        url,
-                        "fresh snapshot reused" if cached and source else "source accepted" if source else "source unavailable or blocked",
-                    )
-                )
-                actions.append(
-                    {
-                        "tool": "memory" if cached else "extractor",
-                        "operation": "reuse_snapshot" if cached else "fetch_and_parse",
-                        "status": "reused" if cached and source else "complete" if source else "degraded",
-                        "source_id": source.id if source else None,
-                    }
-                )
-            if source:
-                source_candidates.append(source)
-                if isinstance(params.get("ranking_bias"), dict):
-                    ranking_biases[source.id] = params["ranking_bias"]
+                    return None, self._span("browser", "escalated_open", fetch_started, "failed", redact_url(url), redact_text(str(error))), {"tool": "browser", "operation": "escalated_open", "status": "failed"}, False, params
+            cached = self.memory.reusable_snapshot(url, org_id, self._reuse_window(task))
+            source = self._source_from_snapshot(cached) if cached else self._source_from_url(url, org_id, params.get("extraction_hints"))
+            span = self._span("extractor", "reuse_snapshot" if cached else "fetch_and_parse", fetch_started, "reused" if cached and source else "complete" if source else "degraded", url, "fresh snapshot reused" if cached and source else "source accepted" if source else "source unavailable or blocked")
+            action = {"tool": "memory" if cached else "extractor", "operation": "reuse_snapshot" if cached else "fetch_and_parse", "status": "reused" if cached and source else "complete" if source else "degraded", "source_id": source.id if source else None}
+            return source, span, action, bool(cached), params
+
+        if retrieval_batch:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(8, len(retrieval_batch))) as pool:
+                retrieval_results = list(pool.map(retrieve_one, retrieval_batch))
+            for source, span, action, reused, params in retrieval_results:
+                reuse_hits += int(reused)
+                spans.append(span)
+                actions.append(action)
+                if source:
+                    source_candidates.append(source)
+                    if isinstance(params.get("ranking_bias"), dict):
+                        ranking_biases[source.id] = params["ranking_bias"]
 
         if not source_candidates and any(call.tool == "search" for call in tool_calls):
             search_started = time.time()
             search_call = next(call for call in tool_calls if call.tool == "search")
-            search_limit = search_call.params.get("limit", 5 if mode in {"focus", "dive"} else 3)
+            search_limit = search_call.params.get("limit", 5 if mode in {"focus", "dive", "monitor"} else 3)
             search_freshness = search_call.params.get("freshness")
-            search_results = search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider)
-            spans.append(self._span("search", "search", search_started, "complete", task, f"{len(search_results)} result(s)"))
-            actions.append({"tool": "search", "operation": "search", "status": "complete", "result_count": len(search_results)})
+            query_count = search_call.params.get("query_count")
+            search_results = search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider, mode=mode, query_count=query_count)
+            spans.append(self._span("search", "semantic_parallel_search" if query_count else "search", search_started, "complete", task, f"{len(search_results)} result(s)"))
+            metadata = getattr(self.search_provider, "last_metadata", None)
+            actions.append({"tool": "search", "operation": "semantic_parallel_search" if query_count else "search", "status": "complete", "result_count": len(search_results), "query_count": query_count, "metadata": metadata if isinstance(metadata, dict) else None})
             search_sources: list[Source] = []
             for item in search_results:
                 search_sources.append(
@@ -550,26 +537,28 @@ class AgentWebEngine:
                         content_type=item.get("content_type"),
                     )
                 )
-            if mode in {"focus", "dive"}:
-                follow_up_limit = 3 if mode == "focus" else 5
+            if mode in {"focus", "dive", "monitor"}:
+                follow_up_limit = 3 if mode in {"focus", "monitor"} else 5
+                candidates = search_sources[:follow_up_limit]
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=min(8, len(candidates) or 1)) as pool:
+                    fetched_items = list(pool.map(lambda candidate: (candidate, self._source_from_url(candidate.url, org_id)), candidates))
                 enriched: list[Source] = []
-                for candidate in search_sources[:follow_up_limit]:
-                    fetch_started = time.time()
-                    fetched = self._source_from_url(candidate.url, org_id)
+                for candidate, fetched in fetched_items:
                     if fetched is not None:
                         enriched.append(fetched)
-                        spans.append(self._span("extractor", "search_result_fetch", fetch_started, "complete", candidate.url, "search result fetched for grounding"))
+                        spans.append(self._span("extractor", "search_result_fetch", time.time(), "complete", candidate.url, "search result fetched for grounding"))
                         actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": "complete", "source_id": fetched.id})
                     else:
                         enriched.append(candidate)
-                        spans.append(self._span("extractor", "search_result_fetch", fetch_started, "degraded", candidate.url, "search result retained without fetched body"))
+                        spans.append(self._span("extractor", "search_result_fetch", time.time(), "degraded", candidate.url, "search result retained without fetched body"))
                         actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": "degraded", "source_id": candidate.id})
                 search_sources = enriched + search_sources[follow_up_limit:]
             source_candidates.extend(search_sources)
 
         ranked = rank(source_candidates, task, ranking_biases, plugins=self.plugins, org_id=org_id)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
-        limit = 1 if mode == "flash" else 3 if mode == "focus" else 5
+        limit = 1 if mode == "flash" else 3 if mode in {"focus", "monitor"} else 5
         selected = [item for item in ranked if item.include][:limit]
         actions.append(
             {
@@ -613,7 +602,7 @@ class AgentWebEngine:
         )
         self.memory.record_usage(org_id, mode)
         self.metrics.gauge("memory_reuse_rate", reuse_hits / max(1, len(requested_urls)), {"org_id": org_id})
-        self.metrics.observe("cost_per_run", {"flash": 0.01, "focus": 0.05, "dive": 0.20}[mode], {"mode": mode, "org_id": org_id})
+        self.metrics.observe("cost_per_run", {"flash": 0.01, "focus": 0.05, "dive": 0.20, "monitor": 0.05}[mode], {"mode": mode, "org_id": org_id})
         return SolveResponse(
             execution_id=execution_id,
             mode=mode,

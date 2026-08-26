@@ -15,7 +15,7 @@ class WorkflowStore:
     """Persist workflow definitions and run outcomes without storing raw page content."""
 
     EVENTS = {"monitor.change_detected", "monitor.no_change", "monitor.check_failed"}
-    MODES = {"flash", "focus", "dive"}
+    MODES = {"flash", "focus", "dive", "monitor"}
 
     def __init__(self, path: str | Path, executor: Callable[[str, str, str], Any], enqueue: Callable[[str, str, str, dict[str, Any]], str] | None = None) -> None:
         self.path = Path(path)
@@ -118,7 +118,7 @@ class WorkflowStore:
         if event not in self.EVENTS:
             raise ValueError("event must be monitor.change_detected, monitor.no_change, or monitor.check_failed")
         if mode not in self.MODES:
-            raise ValueError("mode must be flash, focus, or dive")
+            raise ValueError("mode must be flash, focus, dive, or monitor")
         now = time.time()
         workflow_id = "wf_" + uuid.uuid4().hex[:16]
         with self._connect() as connection:

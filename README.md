@@ -50,6 +50,22 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 
 The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](openapi/openapi.yaml), JSON schemas in [`schemas/`](schemas/), and design documentation under [`docs/`](docs/).
 
+## Four-mode MCP interface
+
+The bundled MCP server exposes `agentweb_capabilities`, `agentweb_research`, `agentweb_extract_page`, `agentweb_crawl`, `agentweb_browser_open`, `agentweb_create_monitor`, `agentweb_check_monitor`, `agentweb_list_monitors`, `agentweb_create_plan`, and `agentweb_execute_plan`. Research supports `flash`, `focus`, `dive`, and `monitor`.
+
+Flash generates up to two semantic query variants and performs light retrieval. Focus generates four variants and performs a concurrent multi-source fetch batch. Dive generates six variants and fans out across public technical, discussion, academic, archival, and long-form branches. Monitor supports durable scheduled checks and adaptive public-source discovery. GitHub and Reddit are default branches in every mode; result URLs are merged and deduplicated before ranking.
+
+Self-hosted and credentialed integrations are intentionally not enabled in the default runtime. See [`selfhosting.md`](selfhosting.md) for the complete exclusion list and integration boundaries. The supplied inventory is preserved in [`AgentWeb-mode-tool-map.md`](AgentWeb-mode-tool-map.md).
+
+Run the MCP server over stdio with:
+
+```bash
+agentweb-mcp --transport stdio --data agentweb.sqlite3
+```
+
+For streamable HTTP, use `agentweb-mcp --transport streamable-http --host 127.0.0.1 --port 8000`; the MCP endpoint is `/mcp`.
+
 ## Quick start
 
 AgentWeb requires **Python 3.11 or newer** and has no default runtime dependencies outside the Python standard library. The following commands install the local package in an isolated virtual environment and start the API server.
