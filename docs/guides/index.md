@@ -3,6 +3,7 @@
 Task-oriented, step-by-step guides for building specific workflows on AgentWeb.
 
 - [Building Connectors](building-connectors.md)
+- [Model Context Protocol Server](mcp.md)
 - [Creating Skills](creating-skills.md)
 - [Custom Rankers](custom-rankers.md)
 - [Deployments](deployments.md)
