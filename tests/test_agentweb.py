@@ -417,6 +417,37 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(response.output_format, "comparison")
         self.assertTrue(response.citations)
 
+    def test_search_modes_control_follow_up_retrieval_depth(self):
+        class SearchFixtureProvider:
+            def __init__(self, urls):
+                self.urls = urls
+                self.calls = []
+
+            def search(self, query, limit=10, freshness=None):
+                self.calls.append((query, limit, freshness))
+                return [{"url": url, "title": f"Result {index}", "snippet": "fixture result"} for index, url in enumerate(self.urls[:limit], 1)]
+
+        urls = [f"{self.url}/result-{index}" for index in range(1, 6)]
+        provider = SearchFixtureProvider(urls)
+        self.engine.search_provider = provider
+
+        flash = self.engine.solve("Find the latest AgentWeb result", mode="flash")
+        focus = self.engine.solve("Find the latest AgentWeb result", mode="focus")
+        dive = self.engine.solve("Find the latest AgentWeb result", mode="dive")
+
+        self.assertEqual(provider.calls, [
+            ("Find the latest AgentWeb result", 3, None),
+            ("Find the latest AgentWeb result", 5, None),
+            ("Find the latest AgentWeb result", 5, None),
+        ])
+        self.assertEqual(flash.selection_logic["source_limit"], 1)
+        self.assertFalse(any(action["operation"] == "search_result_fetch" for action in flash.actions))
+        self.assertEqual(sum(action["operation"] == "search_result_fetch" for action in focus.actions), 3)
+        self.assertEqual(focus.selection_logic["source_limit"], 3)
+        self.assertEqual(sum(action["operation"] == "search_result_fetch" for action in dive.actions), 5)
+        self.assertEqual(dive.selection_logic["source_limit"], 5)
+        self.assertTrue(all(action["status"] == "complete" for response in (focus, dive) for action in response.actions if action["operation"] == "search_result_fetch"))
+
     def test_solve_exposes_secret_safe_execution_transparency(self):
         response = self.engine.solve(f"Summarize {self.url}")
         payload = response.to_dict()

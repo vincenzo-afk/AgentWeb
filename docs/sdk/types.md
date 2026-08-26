@@ -3,13 +3,21 @@
 Core shared types across SDKs (shown here in TypeScript-flavored pseudocode; Python equivalents mirror these as typed dataclasses/TypedDicts).
 
 ```ts
-type Mode = "flash" | "focus" | "dive" | "monitor";
+type SolveMode = "flash" | "focus" | "dive";
+type ObserveMode = "monitor";
 
 interface SolveRequest {
   task: string;
-  mode?: Mode;
+  mode?: SolveMode;
   skill?: string;
   inputs?: Record<string, unknown>;
+  webhookUrl?: string;
+  idempotencyKey?: string;
+}
+
+interface ObserveRequest {
+  task: string;
+  mode?: ObserveMode;
   webhookUrl?: string;
   idempotencyKey?: string;
 }
@@ -28,7 +36,7 @@ interface Citation {
 
 interface SolveResponse {
   executionId: string;
-  mode: Mode;
+  mode: SolveMode;
   answer: string;
   sources: Source[];
   citations: Citation[];

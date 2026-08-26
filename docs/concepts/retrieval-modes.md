@@ -4,12 +4,12 @@ AgentWeb exposes different levels of retrieval depth so developers can trade off
 
 | Mode | Purpose | Typical behavior |
 |---|---|---|
-| **Flash** | Instant search and lightweight grounding | Fast text-and-link retrieval from top results with minimal browsing |
-| **Focus** | Mid-depth answer generation | Search plus selective browsing and extraction for stronger grounding |
-| **Dive** | Deep multi-source research | Multi-step browsing, extraction, comparison, ranking, and synthesis across many sources |
-| **Monitor** | Continuous observation and alerting | Scheduled checks, change detection, diffing, and update delivery over time |
+| **Flash** | Instant search and lightweight grounding | Provider search only, with bounded top-result ranking and minimal browsing; no follow-up page fetches |
+| **Focus** | Mid-depth answer generation | Provider search followed by bounded fetch-and-extract of up to three top results before ranking and synthesis |
+| **Dive** | Deep multi-source research | Provider search followed by bounded fetch-and-extract of up to five top results before comparison, ranking, and synthesis |
+| **Monitor** | Continuous observation and alerting | Separate `/observe` surface for scheduled checks, change detection, diffing, and update delivery over time |
 
-These modes make the platform more legible to developers while preserving the long-term goal of fully automatic orchestration — if you don't specify a mode, the planner picks one based on the task.
+These modes make the platform more legible to developers while preserving the long-term goal of fully automatic orchestration — if you don't specify a solve mode, the planner picks `flash`, `focus`, or `dive` based on the task. `monitor` is an observation surface rather than a `solve` retrieval mode and is created through `/observe`.
 
 ```js
 await internet.solve({ task: "...", mode: "flash" });  // fast, cheap

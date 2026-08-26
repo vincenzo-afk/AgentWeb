@@ -1206,6 +1206,9 @@ components:
           additionalProperties:
             type: string
             enum: [ok, failed, disabled]
+    SolveMode:
+      type: string
+      enum: [flash, focus, dive]
     Mode:
       type: string
       enum: [flash, focus, dive, monitor]
@@ -1553,7 +1556,7 @@ components:
         task:
           type: string
         mode:
-          $ref: '#/components/schemas/Mode'
+          $ref: '#/components/schemas/SolveMode'
         skill:
           type: string
         inputs:
@@ -1621,7 +1624,7 @@ components:
           minLength: 1
           maxLength: 2000
         mode:
-          $ref: '#/components/schemas/Mode'
+          $ref: '#/components/schemas/SolveMode'
         skill:
           type: string
         inputs:
@@ -1780,7 +1783,7 @@ components:
           type: string
           enum: [lookup, comparison, monitoring, longitudinal]
         estimated_mode:
-          $ref: '#/components/schemas/Mode'
+          $ref: '#/components/schemas/SolveMode'
         skill:
           type: string
           nullable: true
@@ -1858,7 +1861,7 @@ components:
         execution_id:
           type: string
         mode:
-          $ref: '#/components/schemas/Mode'
+          $ref: '#/components/schemas/SolveMode'
         answer:
           type: string
         sources:

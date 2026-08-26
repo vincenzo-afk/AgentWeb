@@ -537,8 +537,9 @@ class AgentWebEngine:
             search_results = search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider)
             spans.append(self._span("search", "search", search_started, "complete", task, f"{len(search_results)} result(s)"))
             actions.append({"tool": "search", "operation": "search", "status": "complete", "result_count": len(search_results)})
+            search_sources: list[Source] = []
             for item in search_results:
-                source_candidates.append(
+                search_sources.append(
                     Source(
                         id=self._source_id(item["url"]),
                         url=item["url"],
@@ -549,6 +550,22 @@ class AgentWebEngine:
                         content_type=item.get("content_type"),
                     )
                 )
+            if mode in {"focus", "dive"}:
+                follow_up_limit = 3 if mode == "focus" else 5
+                enriched: list[Source] = []
+                for candidate in search_sources[:follow_up_limit]:
+                    fetch_started = time.time()
+                    fetched = self._source_from_url(candidate.url, org_id)
+                    if fetched is not None:
+                        enriched.append(fetched)
+                        spans.append(self._span("extractor", "search_result_fetch", fetch_started, "complete", candidate.url, "search result fetched for grounding"))
+                        actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": "complete", "source_id": fetched.id})
+                    else:
+                        enriched.append(candidate)
+                        spans.append(self._span("extractor", "search_result_fetch", fetch_started, "degraded", candidate.url, "search result retained without fetched body"))
+                        actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": "degraded", "source_id": candidate.id})
+                search_sources = enriched + search_sources[follow_up_limit:]
+            source_candidates.extend(search_sources)
 
         ranked = rank(source_candidates, task, ranking_biases, plugins=self.plugins, org_id=org_id)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
