@@ -18,6 +18,15 @@ class RankedSource:
     include: bool = True
 
 
+_OFFICIAL_DOCUMENTATION_HOSTS = {
+    "platform.claude.com", "docs.claude.com", "anthropic.com",
+    "platform.openai.com", "developers.openai.com", "openai.github.io", "openai.com",
+    "google.github.io", "ai.google.dev", "adk.dev",
+    "langchain-ai.github.io", "python.langchain.com", "docs.langchain.com", "langchain.com",
+    "microsoft.github.io", "modelcontextprotocol.io", "docs.github.com", "docs.python.org",
+}
+
+
 _QUESTION_STOPWORDS = {
     "what", "which", "who", "when", "where", "why", "how", "the", "this", "that", "with",
     "from", "into", "about", "does", "do", "can", "could", "should", "would", "will", "have",
@@ -86,6 +95,10 @@ def rank(
             + 0.05 * _content_type_fit(source)
             + 0.05 * max(0.0, min(1.0, extraction_confidence))
         )
+        documentation_query = bool(re.search(r"\b(?:official|documentation|docs|reference|api|sdk|guide|framework)\b", task_context.lower()))
+        hostname = urlparse(source.url).hostname.lower().rstrip(".") if urlparse(source.url).hostname else ""
+        if documentation_query and (hostname in _OFFICIAL_DOCUMENTATION_HOSTS or any(hostname.endswith("." + host) for host in _OFFICIAL_DOCUMENTATION_HOSTS)):
+            score += 0.15
         factual_query = bool(re.search(r"\b(?:capital|population|currency|flag)\b|\bwho is\b|\bwhat is\b", task_context.lower()))
         if factual_query:
             factual_text = f"{source.title} {source.snippet}"

@@ -130,10 +130,10 @@ class OfficialDocumentationBranch(_Branch):
     _domain_hints = {
         "claude": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
         "anthropic": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
-        "openai": ["platform.openai.com", "openai.github.io", "openai.com"],
-        "openai agents": ["openai.github.io", "platform.openai.com", "openai.com"],
-        "google adk": ["google.github.io", "ai.google.dev", "developers.googleblog.com"],
-        "adk": ["google.github.io", "ai.google.dev"],
+        "openai": ["platform.openai.com", "developers.openai.com", "openai.github.io", "openai.com"],
+        "openai agents": ["openai.github.io", "developers.openai.com", "platform.openai.com", "openai.com"],
+        "google adk": ["adk.dev", "google.github.io", "ai.google.dev", "developers.googleblog.com"],
+        "adk": ["adk.dev", "google.github.io", "ai.google.dev"],
         "langchain": ["langchain-ai.github.io", "python.langchain.com", "docs.langchain.com"],
         "autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
         "microsoft autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
@@ -158,14 +158,14 @@ class OfficialDocumentationBranch(_Branch):
         ],
         "openai agents": [
             ("https://openai.github.io/openai-agents-python/", "OpenAI Agents SDK documentation"),
-            ("https://platform.openai.com/docs/guides/agents", "OpenAI Agents guide"),
+            ("https://developers.openai.com/api/docs/guides/agents", "OpenAI Agents guide"),
         ],
         "google adk": [
-            ("https://google.github.io/adk-docs/", "Google Agent Development Kit documentation"),
-            ("https://google.github.io/adk-docs/get-started/quickstart/", "Google ADK quickstart"),
+            ("https://adk.dev/", "Google Agent Development Kit documentation"),
+            ("https://adk.dev/get-started/quickstart/", "Google ADK quickstart"),
         ],
         "adk": [
-            ("https://google.github.io/adk-docs/", "Google Agent Development Kit documentation"),
+            ("https://adk.dev/", "Google Agent Development Kit documentation"),
         ],
         "langchain": [
             ("https://docs.langchain.com/oss/python/langchain/retrieval", "LangChain retrieval documentation"),

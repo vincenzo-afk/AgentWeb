@@ -199,7 +199,8 @@ class GeneralWebSearchTests(unittest.TestCase):
             urls = [row["url"] for row in OfficialDocumentationBranch().search(query, 10)]
         self.assertTrue(any("platform.claude.com" in url for url in urls))
         self.assertTrue(any("openai.github.io" in url for url in urls))
-        self.assertTrue(any("google.github.io" in url for url in urls))
+        self.assertTrue(any("developers.openai.com" in url for url in urls))
+        self.assertTrue(any("adk.dev" in url for url in urls))
         self.assertTrue(any("docs.langchain.com" in url for url in urls))
         self.assertTrue(any("microsoft.github.io" in url for url in urls))
 
