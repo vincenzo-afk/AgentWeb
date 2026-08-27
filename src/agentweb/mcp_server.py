@@ -38,10 +38,11 @@ class AgentWebMCPTools:
                 "monitor": {"semantic_queries": "adaptive", "description": "scheduled diff checks and public-source monitoring"},
             },
             "always_on_branches": ["github_api", "reddit_json"],
-            "public_branches": ["github_api", "reddit_json", "duckduckgo_instant_answer", "wikidata", "wikipedia_api", "quick_fact_apis", "stack_exchange_network", "academic_apis", "arxiv", "pubmed_eutilities", "openreview_net", "dbpedia_sparql", "wayback_cdx", "open_library", "project_gutenberg"],
+            "public_branches": ["general_web_search", "official_documentation", "github_api", "reddit_json", "duckduckgo_instant_answer", "wikidata", "wikipedia_api", "quick_fact_apis", "stack_exchange_network", "academic_apis", "arxiv", "pubmed_eutilities", "openreview_net", "dbpedia_sparql", "wayback_cdx", "open_library", "project_gutenberg"],
             "parallel_research": {"max_tasks": 12, "max_concurrency": 8, "description": "run independent adaptive research tasks concurrently"},
             "adaptive_research": {"max_rounds": 6, "max_concurrency": 8, "evidence_target": 12, "stop_reasons": ["evidence_gate_satisfied", "wall_clock_budget_reached", "query_budget_reached", "max_rounds_reached", "candidate_budget_reached"]},
             "model_routing": getattr(self.engine, "model_router", None).status() if getattr(self.engine, "model_router", None) else {"enabled": False, "reason": "not_available"},
+            "web_support": {"general_search": "credential-free public web discovery", "official_documentation": "selective site-scoped retrieval for known documentation domains", "direct_urls": "public HTTP(S) page extraction"},
             "media_support": {"youtube": "metadata and public captions when exposed", "generic_video": "OpenGraph media metadata", "credentials": "not accepted"},
             "excluded_self_hosted_or_keyed": ["see selfhosting.md"],
         }

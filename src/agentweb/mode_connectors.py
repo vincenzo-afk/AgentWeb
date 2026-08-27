@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from html import unescape
 from typing import Callable
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode, quote, urlparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
@@ -93,6 +93,66 @@ class DuckDuckGoInstantAnswerBranch(_Branch):
             if len(results) >= limit:
                 break
         return results[:limit]
+
+
+def _public_web_search(query: str, limit: int, freshness: str | None = None) -> list[dict[str, str]]:
+    from .search import BingSearchHTMLProvider, BraveSearchHTMLProvider, DuckDuckGoHTMLProvider, SearchProviderError
+
+    errors: list[str] = []
+    for provider in (BraveSearchHTMLProvider(), BingSearchHTMLProvider(), DuckDuckGoHTMLProvider()):
+        try:
+            results = provider.search(query, limit, freshness)
+            if results:
+                return results
+        except SearchProviderError as error:
+            errors.append(str(error))
+    if errors:
+        raise SearchProviderError("; ".join(errors))
+    return []
+
+
+class GeneralWebSearchBranch(_Branch):
+    """General public web discovery through ordered HTML search fallbacks."""
+
+    name = "general_web_search"
+
+    def search(self, query: str, limit: int = 5, freshness: str | None = None) -> list[dict[str, str]]:
+        return _public_web_search(query, limit, freshness)
+
+
+class OfficialDocumentationBranch(_Branch):
+    """Search official documentation domains only when the task warrants it."""
+
+    name = "official_documentation"
+    _domain_hints = {
+        "claude": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
+        "anthropic": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
+        "openai": ["platform.openai.com", "openai.com"],
+        "langchain": ["langchain-ai.github.io", "python.langchain.com", "docs.langchain.com"],
+        "mcp": ["modelcontextprotocol.io", "github.com/modelcontextprotocol"],
+        "hugging face": ["huggingface.co/docs", "huggingface.co"],
+        "github": ["docs.github.com", "github.com"],
+        "python": ["docs.python.org", "python.org"],
+    }
+
+    def search(self, query: str, limit: int = 5, freshness: str | None = None) -> list[dict[str, str]]:
+        lowered = query.lower()
+        if not re.search(r"\b(?:official|documentation|docs|reference|api|sdk|how to|guide)\b", lowered):
+            return []
+        domains: list[str] = []
+        for hint, candidates in self._domain_hints.items():
+            if hint in lowered:
+                domains.extend(candidates)
+        scoped_query = query + (" " + " ".join(f"site:{domain}" for domain in list(dict.fromkeys(domains))[:3]) if domains else "")
+        try:
+            results = _public_web_search(scoped_query, limit, freshness)
+        except Exception:
+            results = _public_web_search(query, min(20, max(limit * 2, limit)), freshness)
+        if not domains:
+            return results
+        allowed = tuple(domain.lower() for domain in domains)
+        filtered = [item for item in results if urlparse(item.get("url", "")).netloc.lower().endswith(allowed)]
+        return filtered[:limit]
 
 
 class RedditJSONBranch(_Branch):
@@ -363,7 +423,7 @@ class BranchSearchProvider:
         merged: dict[str, dict[str, str]] = {}
         branch_counts: dict[str, int] = {}
         failures: dict[str, str] = {}
-        priority = {"quick_fact_apis": 0, "primary": 1, "wikipedia_api": 2, "wikidata": 3, "dbpedia_sparql": 4, "academic_apis": 5, "arxiv": 6, "pubmed_eutilities": 7, "openreview_net": 8, "stack_exchange_network": 9, "project_gutenberg": 10, "wayback_cdx": 11, "github_api": 12, "reddit_json": 13, "duckduckgo_instant_answer": 14}
+        priority = {"quick_fact_apis": 0, "official_documentation": 1, "primary": 2, "wikipedia_api": 3, "wikidata": 4, "dbpedia_sparql": 5, "academic_apis": 6, "arxiv": 7, "pubmed_eutilities": 8, "openreview_net": 9, "stack_exchange_network": 10, "project_gutenberg": 11, "wayback_cdx": 12, "general_web_search": 13, "github_api": 14, "reddit_json": 15, "duckduckgo_instant_answer": 16}
         with ThreadPoolExecutor(max_workers=min(16, max(1, len(jobs)))) as pool:
             futures = {pool.submit(job): name for name, job in jobs}
             for future in as_completed(futures):
@@ -408,8 +468,10 @@ def build_mode_search_provider(primary) -> BranchSearchProvider:
     """Build the default public branch graph around the existing primary provider."""
     from .search import GitHubRepositorySearchProvider
     github = GitHubRepositorySearchProvider()
-    flash = [github, DuckDuckGoInstantAnswerBranch(), WikidataBranch(), QuickFactBranch(), RedditJSONBranch()]
-    focus = [github, DuckDuckGoInstantAnswerBranch(), WikidataBranch(), QuickFactBranch(), WikipediaBranch(), RedditJSONBranch()]
+    general_web = GeneralWebSearchBranch()
+    official_docs = OfficialDocumentationBranch()
+    flash = [general_web, official_docs, github, DuckDuckGoInstantAnswerBranch(), WikidataBranch(), QuickFactBranch(), RedditJSONBranch()]
+    focus = [general_web, official_docs, github, DuckDuckGoInstantAnswerBranch(), WikidataBranch(), QuickFactBranch(), WikipediaBranch(), RedditJSONBranch()]
     dive = focus + [StackExchangeBranch(), AcademicBranch(), ArxivBranch(), PubMedBranch(), OpenReviewBranch(), DBpediaBranch(), ProjectGutenbergBranch()]
-    monitor = [github, RedditJSONBranch(), WaybackCDXBranch(), DuckDuckGoInstantAnswerBranch(), WikidataBranch(), QuickFactBranch(), WikipediaBranch()]
+    monitor = [general_web, official_docs, github, RedditJSONBranch(), WaybackCDXBranch(), DuckDuckGoInstantAnswerBranch(), WikidataBranch(), QuickFactBranch(), WikipediaBranch()]
     return BranchSearchProvider(primary, {"flash": flash, "focus": focus, "dive": dive, "monitor": monitor})

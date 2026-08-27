@@ -2,7 +2,7 @@
 
 **AgentWeb is a free, dependency-light Internet intelligence platform for grounded research and page monitoring.** The repository contains a runnable Phase 0 MVP that exposes a small HTTP API for searching, extracting, synthesizing source-backed results, and detecting changes in monitored pages.
 
-> The current implementation is intentionally small and local-first: Python's standard library, SQLite, and either the free DuckDuckGo HTML adapter or a configured HTTP JSON search provider are enough to run it. The broader platform vision remains documented as a phased roadmap.
+> The current implementation is intentionally small and local-first: Python's standard library, SQLite, and credential-free public search adapters are enough to run it. General web discovery uses an ordered Brave HTML, Bing HTML, and DuckDuckGo fallback; a configured HTTP JSON search provider remains optional. The broader platform vision remains documented as a phased roadmap.
 
 ## Contents
 
@@ -30,7 +30,7 @@ The MVP follows the repository's Phase 0 requirements: a one-shot grounded-resea
 | --- | --- |
 | Grounded research | `POST /solve` accepts a task and returns an answer, sources, citations, execution ID, timestamp, evidence score, explicit conflicts, and selected output format. Weak evidence is marked `insufficient_evidence` instead of being fabricated. An optional `graph_query` supplies bounded graph context as additional grounded sources. |
 | Retrieval modes | `flash`, `focus`, `dive`, and `monitor` are accepted; they control the number of returned sources. |
-| Search | `POST /search` uses a pluggable provider boundary with free DuckDuckGo fallback, optional HTTP JSON provider configuration, freshness filters, normalized published dates when supplied, and graceful provider failure. |
+| Search | `POST /search` uses a pluggable provider boundary with credential-free Brave HTML, Bing HTML, and DuckDuckGo fallback, optional HTTP JSON provider configuration, freshness filters, normalized published dates when supplied, and graceful provider failure. |
 | Extraction | `POST /extract` parses an HTTP(S) page and returns title, description, normalized text, links, warnings, overall confidence, field-level confidence, and optional schema-guided fields with confidence scores. Parser-derived pages and mentions are also ingested into the tenant graph with source provenance. |
 | Parsing and normalization | Standalone parser and normalizer modules handle HTML, JSON, text, PDF fallback warnings, prices, dates, entities, and raw-value preservation. |
 | Trust and ranking | Unsafe target classes are blocked by default; accepted sources are ranked using trust, task relevance, and corroboration signals. |
@@ -55,6 +55,8 @@ The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](op
 The bundled MCP server exposes `agentweb_capabilities`, `agentweb_research`, `agentweb_parallel_research`, `agentweb_extract_page`, `agentweb_crawl`, `agentweb_browser_open`, `agentweb_create_monitor`, `agentweb_check_monitor`, `agentweb_list_monitors`, `agentweb_create_plan`, and `agentweb_execute_plan`. Research supports `flash`, `focus`, `dive`, and `monitor`; each run uses a bounded adaptive evidence loop, and independent tasks can be submitted concurrently through `agentweb_parallel_research`.
 
 Flash generates up to two semantic query variants and performs light retrieval. Focus generates four variants and performs concurrent source waves. Dive generates six variants and fans out across public technical, discussion, academic, archival, and long-form branches. Monitor supports durable scheduled checks and adaptive public-source discovery. After each wave, AgentWeb evaluates source diversity, authority, corroboration, conflicts, and missing source families; it schedules targeted follow-up queries only when the evidence gate is not satisfied, then returns a secret-safe trace with waves, concurrency, gaps, and the explicit stop reason. GitHub and Reddit are available in every mode, but factual source families are prioritized when the task warrants them. The response includes the full bounded normalized evidence bundle alongside the synthesized answer.
+
+General web discovery is available through the `general_web_search` branch, and documentation-shaped tasks selectively activate `official_documentation`. The documentation branch filters results to known first-party hosts, including `platform.claude.com`, `platform.openai.com`, `langchain-ai.github.io`, `docs.langchain.com`, `modelcontextprotocol.io`, `docs.python.org`, and other configured domains. If a public search endpoint is blocked or rate-limited, the next public fallback is attempted and the trace records branch failures; AgentWeb never bypasses CAPTCHAs, authentication, or rate limits.
 
 Direct public video URLs are supported through OpenGraph and YouTube player metadata. When a public YouTube page exposes caption tracks, AgentWeb attempts to fetch and include the caption transcript as grounded evidence; private, gated, or unavailable captions are reported as unavailable rather than bypassed. Self-hosted and credentialed integrations are intentionally not enabled in the default runtime. See [`selfhosting.md`](selfhosting.md) for the complete exclusion list and integration boundaries. The supplied inventory is preserved in [`AgentWeb-mode-tool-map.md`](AgentWeb-mode-tool-map.md). Render deployment defaults are provided in [`render.yaml`](render.yaml).
 
@@ -295,7 +297,7 @@ The continuous integration workflow runs the same checks on Python 3.11. GitHub 
 
 This repository does not yet implement CAPTCHA/MFA automation, LLM-based synthesis, or a full relational runtime cutover.
   External secret resolution, organization-scoped idempotency records, usage summaries, cursor pagination, an optional PostgreSQL relational adapter, additive migration manifests, schema bootstrap, checksum validation, transaction-scoped import, and coordinator-aware retention scheduling are implemented; a managed cloud secret backend, full runtime dual-write cutover, and snapshot/graph migration remain deployment work. The local HTTP API and monitor execution continue to use the SQLite memory boundary until a production deployment wires all relational ownership paths to the PostgreSQL adapter.
- Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. The public DuckDuckGo HTML adapter is best-effort and may be unavailable or change format.
+ Rendered browser sessions and scheduled monitor execution are available through the optional browser extra and the supervised `agentweb --worker` process. Public HTML search providers are best-effort and may be unavailable or change format; AgentWeb reports provider failures rather than silently presenting a keyed or self-hosted substitute.
  Direct page fetching should be used only with URLs and data sources that the operator is authorized to access.
 
 These limitations are explicit so the repository's runnable behavior remains distinct from the broader product vision and roadmap.

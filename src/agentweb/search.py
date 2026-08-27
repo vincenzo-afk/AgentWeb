@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from typing import Protocol
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -104,6 +106,131 @@ class DuckDuckGoHTMLProvider:
             )
             snippet = html_to_text(snippet_match.group(1)) if snippet_match else ""
             results.append({"url": url, "title": title, "snippet": snippet})
+            if len(results) >= limit:
+                break
+        return results
+
+
+class _BraveResultParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.snippet_depth: int | None = None
+        self.current_link: str | None = None
+        self.current_link_depth: int | None = None
+        self.link_parts: list[str] = []
+        self.body_parts: list[str] = []
+        self.links: list[tuple[str, str, str]] = []
+        self._link_seen = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if tag == "div" and "snippet" in classes and self.snippet_depth is None:
+            self.snippet_depth = self.depth
+            self.link_parts = []
+            self.body_parts = []
+            self._link_seen = False
+        elif tag == "a" and self.snippet_depth is not None and not self._link_seen:
+            href = attributes.get("href") or ""
+            if href.startswith(("http://", "https://")) and "search.brave.com" not in href and "imgs.search.brave.com" not in href:
+                self.current_link = href
+                self.current_link_depth = self.depth
+                self.link_parts = []
+                self._link_seen = True
+        self.depth += 1
+
+    def handle_data(self, data: str) -> None:
+        if self.snippet_depth is None:
+            return
+        text = " ".join(data.split())
+        if not text:
+            return
+        self.body_parts.append(text)
+        if self.current_link is not None:
+            self.link_parts.append(text)
+
+    def handle_endtag(self, tag: str) -> None:
+        self.depth = max(0, self.depth - 1)
+        if tag == "a" and self.current_link is not None and self.current_link_depth == self.depth:
+            self.links.append((self.current_link, " ".join(self.link_parts).strip(), " ".join(self.body_parts).strip()))
+            self.current_link = None
+            self.current_link_depth = None
+        if tag == "div" and self.snippet_depth is not None and self.depth == self.snippet_depth:
+            self.snippet_depth = None
+
+
+class BraveSearchHTMLProvider:
+    """General public web discovery through Brave's HTML search page."""
+
+    def __init__(self, timeout: float = 10.0) -> None:
+        self.timeout = timeout
+
+    def search(self, query: str, limit: int = 10, freshness: str | None = None) -> list[dict[str, str]]:
+        query, limit, _ = _validate_query(query, limit, freshness)
+        endpoint = "https://search.brave.com/search?" + urlencode({"q": query})
+        request = Request(endpoint, headers={"User-Agent": "Mozilla/5.0 (compatible; AgentWeb/0.13)", "Accept": "text/html,application/xhtml+xml"})
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                body = response.read(2_000_000).decode("utf-8", errors="replace")
+        except Exception as error:
+            raise SearchProviderError(f"Brave provider unavailable: {type(error).__name__}") from error
+        parser = _BraveResultParser()
+        parser.feed(body)
+        results: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for url, title, raw_body in parser.links:
+            if url in seen:
+                continue
+            seen.add(url)
+            snippet = raw_body
+            if title and snippet.startswith(title):
+                snippet = snippet[len(title):].strip(" -:")
+            results.append({"url": url, "title": title or url, "snippet": snippet[:1_000]})
+            if len(results) >= limit:
+                break
+        return results
+
+
+def _clean_bing_result_url(href: str) -> str:
+    parsed = urlparse(href)
+    encoded = parse_qs(parsed.query).get("u", [""])[0]
+    if encoded.startswith("a1"):
+        try:
+            raw = encoded[2:]
+            raw += "=" * (-len(raw) % 4)
+            decoded = base64.urlsafe_b64decode(raw).decode("utf-8", errors="ignore")
+            if decoded.startswith(("http://", "https://")):
+                return decoded
+        except Exception:
+            pass
+    return href
+
+
+class BingSearchHTMLProvider:
+    """General public web discovery through Bing's HTML result page."""
+
+    def __init__(self, timeout: float = 10.0) -> None:
+        self.timeout = timeout
+
+    def search(self, query: str, limit: int = 10, freshness: str | None = None) -> list[dict[str, str]]:
+        query, limit, _ = _validate_query(query, limit, freshness)
+        endpoint = "https://www.bing.com/search?" + urlencode({"q": query})
+        request = Request(endpoint, headers={"User-Agent": "Mozilla/5.0 (compatible; AgentWeb/0.13)", "Accept": "text/html,application/xhtml+xml"})
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                body = response.read(2_000_000).decode("utf-8", errors="replace")
+        except Exception as error:
+            raise SearchProviderError(f"Bing provider unavailable: {type(error).__name__}") from error
+        results: list[dict[str, str]] = []
+        seen: set[str] = set()
+        pattern = re.compile(r'(?is)<li[^>]*class=["\'][^"\']*\bb_algo\b[^"\']*["\'][^>]*>.*?<h2[^>]*>.*?<a[^>]*href=["\'](.*?)["\'][^>]*>(.*?)</a>.*?<p[^>]*>(.*?)</p>')
+        for href, title_markup, snippet_markup in pattern.findall(body):
+            url = _clean_bing_result_url(html_to_text(href))
+            if not url.startswith(("http://", "https://")) or "bing.com/ck/a" in url or url in seen:
+                continue
+            seen.add(url)
+            results.append({"url": url, "title": html_to_text(title_markup), "snippet": html_to_text(snippet_markup)[:1_000]})
             if len(results) >= limit:
                 break
         return results
@@ -239,13 +366,13 @@ class FallbackSearchProvider:
 def build_search_provider(secret_provider: SecretProvider | None = None) -> SearchProvider:
     config = SearchProviderConfig.from_environment()
     if config.name == "duckduckgo":
-        primary = FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout))
+            primary = FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), FallbackSearchProvider(BraveSearchHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout)))
     else:
         secret_provider = secret_provider or build_provider()
         api_key = secret_provider.get(config.api_key_name, required=False)
         primary = FallbackSearchProvider(
             JsonSearchProvider(config.endpoint or "", api_key, config.timeout),
-            FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout)),
+            FallbackSearchProvider(DuckDuckGoHTMLProvider(config.timeout), FallbackSearchProvider(BraveSearchHTMLProvider(config.timeout), GitHubRepositorySearchProvider(config.timeout))),
         )
     from .mode_connectors import build_mode_search_provider
     return build_mode_search_provider(primary)

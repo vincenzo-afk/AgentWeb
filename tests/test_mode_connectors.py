@@ -1,6 +1,6 @@
 import unittest
 
-from agentweb.mode_connectors import BranchSearchProvider, semantic_queries
+from agentweb.mode_connectors import BranchSearchProvider, GeneralWebSearchBranch, OfficialDocumentationBranch, semantic_queries
 from agentweb.mcp_server import AgentWebMCPTools
 
 
@@ -129,3 +129,74 @@ class AdaptiveMCPContractTests(unittest.TestCase):
         self.assertEqual(engine.calls[0][1]["max_rounds"], 4)
         self.assertEqual(engine.calls[0][1]["max_concurrency"], 7)
         self.assertEqual(engine.calls[0][1]["evidence_target"], 8)
+
+
+class GeneralWebSearchTests(unittest.TestCase):
+    def test_brave_html_parser_extracts_result(self):
+        from unittest.mock import patch
+        from agentweb.search import BraveSearchHTMLProvider
+
+        html = '''<div class="snippet"><a href="https://platform.claude.com/docs/en/api/messages"><div class="title">Messages - Claude API Reference</div><div class="generic-snippet"><div class="content">API reference for Messages endpoints</div></div></a></div>'''
+
+        class Response:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return None
+            def read(self, _limit):
+                return html.encode()
+
+        with patch("agentweb.search.urlopen", return_value=Response()):
+            results = BraveSearchHTMLProvider().search("Claude Messages API", 3)
+        self.assertEqual(results[0]["url"], "https://platform.claude.com/docs/en/api/messages")
+        self.assertIn("Messages", results[0]["title"])
+
+    def test_bing_html_parser_decodes_redirected_result(self):
+        import base64
+        from unittest.mock import patch
+        from agentweb.search import BingSearchHTMLProvider
+
+        target = "https://platform.openai.com/docs/api-reference"
+        encoded = "a1" + base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
+        html = f'''<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?u={encoded}">OpenAI API Reference</a></h2><div class="b_caption"><p>Official API documentation</p></div></li>'''
+
+        class Response:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return None
+            def read(self, _limit):
+                return html.encode()
+
+        with patch("agentweb.search.urlopen", return_value=Response()):
+            results = BingSearchHTMLProvider().search("OpenAI API reference", 3)
+        self.assertEqual(results[0]["url"], target)
+        self.assertEqual(results[0]["title"], "OpenAI API Reference")
+
+    def test_general_branch_falls_back_when_brave_fails(self):
+        from unittest.mock import patch
+        from agentweb.search import SearchProviderError
+        result = [{"url": "https://example.org/result", "title": "Result", "snippet": "evidence"}]
+        with patch("agentweb.search.BraveSearchHTMLProvider.search", side_effect=SearchProviderError("blocked")), patch("agentweb.search.BingSearchHTMLProvider.search", return_value=result):
+            self.assertEqual(GeneralWebSearchBranch().search("anything", 2), result)
+
+    def test_official_branch_filters_to_authoritative_hosts(self):
+        from unittest.mock import patch
+        rows = [
+            {"url": "https://platform.openai.com/docs/api-reference", "title": "Official", "snippet": "docs"},
+            {"url": "https://example.org/openai-docs", "title": "Untrusted", "snippet": "docs"},
+        ]
+        with patch("agentweb.mode_connectors._public_web_search", return_value=rows):
+            result = OfficialDocumentationBranch().search("official OpenAI API documentation", 5)
+        self.assertEqual([row["url"] for row in result], [rows[0]["url"]])
+
+    def test_capabilities_advertise_general_web_and_official_docs(self):
+        payload = AgentWebMCPTools(object()).capabilities()
+        self.assertIn("general_web_search", payload["public_branches"])
+        self.assertIn("official_documentation", payload["public_branches"])
+        self.assertIn("general_search", payload["web_support"])
+        self.assertIn("official_documentation", payload["web_support"])
+
+
+if __name__ == "__main__":
+    unittest.main()
