@@ -201,11 +201,22 @@ class OfficialDocumentationBranch(_Branch):
         ],
         "microsoft autogen": [
             ("https://microsoft.github.io/autogen/stable/", "Microsoft AutoGen documentation"),
+            ("https://github.com/microsoft/autogen/releases", "Microsoft AutoGen releases"),
+            ("https://learn.microsoft.com/en-us/agent-framework/migration-guide/from-autogen/", "AutoGen to Microsoft Agent Framework migration"),
         ],
         "mcp": [("https://modelcontextprotocol.io/docs/getting-started/intro", "Model Context Protocol documentation")],
         "hugging face": [("https://huggingface.co/docs", "Hugging Face documentation")],
         "github": [("https://docs.github.com/en", "GitHub documentation")],
         "python": [("https://docs.python.org/3/", "Python documentation")],
+    }
+
+    _seed_snippets = {
+        "https://microsoft.github.io/autogen/stable/": (
+            "Official AutoGen documentation describes AgentChat as a framework for conversational single- and multi-agent applications, "
+            "Core as an event-driven framework for scalable multi-agent systems, and Extensions as including McpWorkbench for MCP servers."
+        ),
+        "https://github.com/microsoft/autogen/releases": "Official Microsoft AutoGen release history; exact current release must be verified from the live release page.",
+        "https://learn.microsoft.com/en-us/agent-framework/migration-guide/from-autogen/": "Official Microsoft migration documentation for moving from AutoGen to Microsoft Agent Framework.",
     }
 
     @staticmethod
@@ -219,6 +230,7 @@ class OfficialDocumentationBranch(_Branch):
             return []
         domains: list[str] = []
         seeds: list[dict[str, str]] = []
+        seed_groups: list[list[dict[str, str]]] = []
         matched_hints = [(hint, candidates) for hint, candidates in self._domain_hints.items() if hint in lowered]
         matched_hints.sort(key=lambda item: len(item[0]), reverse=True)
         hint_groups = {
@@ -239,8 +251,14 @@ class OfficialDocumentationBranch(_Branch):
             processed_groups.add(group)
             domains.extend(candidates)
             seed_key = hint if hint in self._seed_urls else group
+            current_group: list[dict[str, str]] = []
             for url, title in self._seed_urls.get(seed_key, []):
-                seeds.append({"url": url, "title": title, "snippet": "First-party documentation seed for this product."})
+                current_group.append({"url": url, "title": title, "snippet": self._seed_snippets.get(url, "First-party documentation seed for this product.")})
+            if current_group:
+                seed_groups.append(current_group)
+                seeds.extend(current_group)
+        if len(seed_groups) > 1:
+            seeds = [group[0] for group in seed_groups] + [item for group in seed_groups for item in group[1:]]
         if not domains:
             return []
         scoped_query = query + " " + " ".join(f"site:{domain}" for domain in list(dict.fromkeys(domains))[:3])

@@ -73,8 +73,11 @@ def evidence_state(task: str, sources: list[object]) -> dict[str, object]:
         required.add("technical")
     if re.search(r"\b(?:video|youtube|watch|transcript)\b", lowered):
         required.add("media")
+    comparison_official = bool(re.search(r"\b(?:compare|comparison|frameworks?)\b", lowered) and re.search(r"\b(?:official|documentation|docs|release|changelog)\b", lowered))
     if re.search(r"\b(?:latest|current|today|news|trend)\b", lowered):
-        required.update({"web", "discussion"})
+        required.add("web")
+        if not comparison_official:
+            required.add("discussion")
     if re.search(r"\b(?:capital|population|currency)\b|\bwho is\b|\bwhat is\b", lowered):
         required.add("knowledge")
     missing = sorted(required - families)
