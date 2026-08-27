@@ -222,6 +222,9 @@ class GeneralWebSearchTests(unittest.TestCase):
         self.assertIn("official_documentation", payload["public_branches"])
         self.assertIn("general_search", payload["web_support"])
         self.assertIn("official_documentation", payload["web_support"])
+        self.assertIn("platform.claude.com", payload["official_documentation_domains"])
+        self.assertIn("developers.openai.com", payload["official_documentation_domains"])
+        self.assertIn("adk.dev", payload["official_documentation_domains"])
 
 
 if __name__ == "__main__":

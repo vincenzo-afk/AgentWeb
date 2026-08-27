@@ -42,7 +42,8 @@ class AgentWebMCPTools:
             "parallel_research": {"max_tasks": 12, "max_concurrency": 8, "description": "run independent adaptive research tasks concurrently"},
             "adaptive_research": {"max_rounds": 6, "max_concurrency": 8, "evidence_target": 12, "stop_reasons": ["evidence_gate_satisfied", "wall_clock_budget_reached", "query_budget_reached", "max_rounds_reached", "candidate_budget_reached"]},
             "model_routing": getattr(self.engine, "model_router", None).status() if getattr(self.engine, "model_router", None) else {"enabled": False, "reason": "not_available"},
-            "web_support": {"general_search": "credential-free public web discovery", "official_documentation": "selective site-scoped retrieval for known documentation domains", "direct_urls": "public HTTP(S) page extraction"},
+            "web_support": {"general_search": "credential-free public web discovery", "official_documentation": "selective first-party retrieval for configured documentation domains", "direct_urls": "public HTTP(S) page extraction"},
+            "official_documentation_domains": ["platform.claude.com", "docs.claude.com", "developers.openai.com", "platform.openai.com", "openai.github.io", "adk.dev", "google.github.io", "ai.google.dev", "docs.langchain.com", "langchain-ai.github.io", "microsoft.github.io", "modelcontextprotocol.io", "docs.github.com", "docs.python.org"],
             "media_support": {"youtube": "metadata and public captions when exposed", "generic_video": "OpenGraph media metadata", "credentials": "not accepted"},
             "excluded_self_hosted_or_keyed": ["see selfhosting.md"],
         }
