@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from typing import Literal
 
 from mcp.server import MCPServer
@@ -48,7 +49,7 @@ def _compact_source(source: object, *, keep_media: bool = True, include_detail: 
     return compact
 
 
-def _compact_structured_output(value: object) -> object:
+def _compact_structured_output(value: object, *, facet_chars: int = 180) -> object:
     if not isinstance(value, dict):
         return value
     if "frameworks" in value:
@@ -60,7 +61,7 @@ def _compact_structured_output(value: object) -> object:
             facets = {}
             for key, facet in list((framework.get("facets") or {}).items())[:12]:
                 if isinstance(facet, dict):
-                    facets[key] = {"status": facet.get("status"), "evidence": str(facet.get("evidence", ""))[:360], "source_ids": list(facet.get("source_ids") or [])[:3]}
+                    facets[key] = {"status": facet.get("status"), "evidence": str(facet.get("evidence", ""))[:facet_chars], "source_ids": list(facet.get("source_ids") or [])[:3]}
             frameworks.append({"framework": framework.get("framework"), "facets": facets, "source_ids": list(framework.get("source_ids") or [])[:12]})
         output["frameworks"] = frameworks
         output["references"] = [{"id": item.get("id"), "url": item.get("url"), "title": item.get("title")} for item in (value.get("references") or [])[:20] if isinstance(item, dict)]
@@ -68,7 +69,7 @@ def _compact_structured_output(value: object) -> object:
     return value
 
 
-def _compact_research_response(payload: dict, *, include_all_evidence: bool = False, max_answer_chars: int = 18_000, max_sources: int | None = None, include_detail: bool | None = None) -> dict:
+def _compact_research_response(payload: dict, *, include_all_evidence: bool = False, max_answer_chars: int = 18_000, max_sources: int | None = None, include_detail: bool | None = None, max_total_chars: int = 32_000) -> dict:
     """Keep MCP responses answer-first and bounded even when full evidence is requested."""
     if not isinstance(payload, dict):
         return {"status": "failed", "error": "invalid research response"}
@@ -84,7 +85,18 @@ def _compact_research_response(payload: dict, *, include_all_evidence: bool = Fa
     if isinstance(citations, list):
         compact["citations"] = citations[:80]
     if "structured_output" in compact:
-        compact["structured_output"] = _compact_structured_output(compact.get("structured_output"))
+        compact["structured_output"] = _compact_structured_output(compact.get("structured_output"), facet_chars=180)
+    compact.pop("actions", None)
+    compact.pop("plan", None)
+    compact.pop("selection_logic", None)
+    if len(json.dumps(compact, ensure_ascii=False)) > max_total_chars:
+        compact["sources"] = compact.get("sources", [])[:6] if isinstance(compact.get("sources"), list) else compact.get("sources")
+        compact["citations"] = compact.get("citations", [])[:60] if isinstance(compact.get("citations"), list) else compact.get("citations")
+        trace_value = compact.get("research_trace")
+        if isinstance(trace_value, dict):
+            compact["research_trace"] = {key: trace_value.get(key) for key in ("queries", "final_evidence", "candidate_count", "ranked_count", "selected_count", "stop_reason") if key in trace_value}
+    if len(json.dumps(compact, ensure_ascii=False)) > max_total_chars and isinstance(compact.get("answer"), str):
+        compact["answer"] = compact["answer"][:max(8_000, max_total_chars // 2)]
     trace = compact.get("research_trace")
     if isinstance(trace, dict):
         compact["research_trace"] = {
@@ -137,7 +149,7 @@ class AgentWebMCPTools:
                 if "unexpected keyword argument" not in str(error):
                     raise
                 response = self.engine.solve(normalized_task, mode=mode, output_format="text")
-            return _compact_research_response(response.to_dict(), include_all_evidence=include_all_evidence, max_answer_chars=18_000, max_sources=12 if include_all_evidence else 8)
+            return _compact_research_response(response.to_dict(), include_all_evidence=include_all_evidence, max_answer_chars=18_000, max_sources=10 if include_all_evidence else 6, max_total_chars=32_000)
         except Exception as error:
             return {"status": "failed", "error": str(error) or type(error).__name__, "error_type": type(error).__name__, "mode": mode}
 
@@ -150,8 +162,8 @@ class AgentWebMCPTools:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(max_concurrency, len(normalized_tasks))) as pool:
             raw_results = list(pool.map(lambda task: self.research(task, mode, max_rounds, max_concurrency, evidence_target, include_all_evidence), normalized_tasks))
-        results = [_compact_research_response(result, include_all_evidence=include_all_evidence, max_answer_chars=6_000, max_sources=5 if include_all_evidence else 4, include_detail=False) for result in raw_results]
-        return {"status": "complete", "mode": mode, "task_count": len(results), "results": results, "payload_policy": {"answer_first": True, "include_all_evidence": include_all_evidence, "max_answer_chars_per_task": 6_000, "sources_per_task": 5 if include_all_evidence else 4, "raw_page_structures": "omitted"}}
+        results = [_compact_research_response(result, include_all_evidence=include_all_evidence, max_answer_chars=6_000, max_sources=4 if include_all_evidence else 3, include_detail=False, max_total_chars=12_000) for result in raw_results]
+        return {"status": "complete", "mode": mode, "task_count": len(results), "results": results, "payload_policy": {"answer_first": True, "include_all_evidence": include_all_evidence, "max_answer_chars_per_task": 6_000, "sources_per_task": 4 if include_all_evidence else 3, "raw_page_structures": "omitted"}}
 
     def extract_page(self, url: str, requested_schema: dict | None = None) -> dict:
         normalized_url = _bounded_text(url, field="url", maximum=2_048)
