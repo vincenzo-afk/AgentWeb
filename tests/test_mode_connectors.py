@@ -186,6 +186,12 @@ class GeneralWebSearchTests(unittest.TestCase):
         with patch("agentweb.search.BraveSearchHTMLProvider.search", side_effect=SearchProviderError("blocked")), patch("agentweb.search.BingSearchHTMLProvider.search", return_value=result):
             self.assertEqual(GeneralWebSearchBranch().search("anything", 2), result)
 
+    def test_official_branch_skips_unknown_product_queries(self):
+        from unittest.mock import patch
+        with patch("agentweb.mode_connectors._public_web_search") as search:
+            self.assertEqual(OfficialDocumentationBranch().search("official documentation for a novel product", 5), [])
+            search.assert_not_called()
+
     def test_official_branch_filters_to_authoritative_hosts(self):
         from unittest.mock import patch
         rows = [

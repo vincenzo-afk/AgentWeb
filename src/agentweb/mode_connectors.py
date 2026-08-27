@@ -177,7 +177,9 @@ class OfficialDocumentationBranch(_Branch):
                 domains.extend(candidates)
                 for url, title in self._seed_urls.get(hint, []):
                     seeds.append({"url": url, "title": title, "snippet": "First-party documentation seed for this product."})
-        scoped_query = query + (" " + " ".join(f"site:{domain}" for domain in list(dict.fromkeys(domains))[:3]) if domains else "")
+        if not domains:
+            return []
+        scoped_query = query + " " + " ".join(f"site:{domain}" for domain in list(dict.fromkeys(domains))[:3])
         try:
             results = _public_web_search(scoped_query, limit, freshness)
         except Exception:
@@ -185,8 +187,6 @@ class OfficialDocumentationBranch(_Branch):
                 results = _public_web_search(query, min(20, max(limit * 2, limit)), freshness)
             except Exception:
                 results = []
-        if not domains:
-            return (seeds + results)[:limit]
         allowed = tuple(domain.lower() for domain in domains)
         filtered = [item for item in results if self._host_matches(item.get("url", ""), allowed)]
         merged: list[dict[str, str]] = []
