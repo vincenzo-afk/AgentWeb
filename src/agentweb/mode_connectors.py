@@ -141,6 +141,7 @@ class OfficialDocumentationBranch(_Branch):
         "autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
         "microsoft autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
         "mcp": ["modelcontextprotocol.io", "github.com/modelcontextprotocol"],
+        "model context protocol": ["modelcontextprotocol.io", "github.com/modelcontextprotocol"],
         "hugging face": ["huggingface.co"],
         "github": ["docs.github.com", "github.com"],
         "python": ["docs.python.org", "python.org"],
@@ -205,6 +206,7 @@ class OfficialDocumentationBranch(_Branch):
             ("https://learn.microsoft.com/en-us/agent-framework/migration-guide/from-autogen/", "AutoGen to Microsoft Agent Framework migration"),
         ],
         "mcp": [("https://modelcontextprotocol.io/docs/getting-started/intro", "Model Context Protocol documentation")],
+        "model context protocol": [("https://modelcontextprotocol.io/docs/getting-started/intro", "Model Context Protocol documentation")],
         "hugging face": [("https://huggingface.co/docs", "Hugging Face documentation")],
         "github": [("https://docs.github.com/en", "GitHub documentation")],
         "python": [("https://docs.python.org/3/", "Python documentation")],
@@ -215,6 +217,7 @@ class OfficialDocumentationBranch(_Branch):
             "Official AutoGen documentation describes AgentChat as a framework for conversational single- and multi-agent applications, "
             "Core as an event-driven framework for scalable multi-agent systems, and Extensions as including McpWorkbench for MCP servers."
         ),
+        "https://modelcontextprotocol.io/docs/getting-started/intro": "Official Model Context Protocol documentation and specification introduction.",
         "https://github.com/microsoft/autogen/releases": "Official Microsoft AutoGen release history; exact current release must be verified from the live release page.",
         "https://learn.microsoft.com/en-us/agent-framework/migration-guide/from-autogen/": "Official Microsoft migration documentation for moving from AutoGen to Microsoft Agent Framework.",
     }

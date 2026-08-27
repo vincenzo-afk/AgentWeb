@@ -3,6 +3,7 @@ import unittest
 from agentweb.engine import AgentWebEngine
 from agentweb.models import Source
 from agentweb.quality import factual_gate, official_target_hosts
+from agentweb.mode_connectors import OfficialDocumentationBranch
 from agentweb.ranking import rank
 
 
@@ -11,6 +12,11 @@ class QualityPolicyTests(unittest.TestCase):
         self.assertIn("modelcontextprotocol.io", official_target_hosts("Find the official MCP specification homepage"))
         self.assertIn("developers.openai.com", official_target_hosts("OpenAI Agents SDK documentation"))
         self.assertIn("docs.python.org", official_target_hosts("official Python asyncio documentation"))
+
+    def test_full_model_context_protocol_phrase_returns_first_party_seed(self):
+        results = OfficialDocumentationBranch().search("Find the official Model Context Protocol specification homepage", limit=3)
+        self.assertTrue(results)
+        self.assertTrue(results[0]["url"].startswith("https://modelcontextprotocol.io/"))
 
     def test_target_domain_outranks_unrelated_relevant_page(self):
         sources = [
