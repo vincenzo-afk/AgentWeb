@@ -649,8 +649,13 @@ class AgentWebEngine:
                             continue
                         seen_urls.add(item["url"])
                         wave_sources.append(Source(id=self._source_id(item["url"]), url=item["url"], title=item.get("title", ""), snippet=item.get("snippet", ""), trust_score=self._trust_score(item["url"], item.get("title", "")), published_at=item.get("published_at"), content_type=item.get("content_type")))
-                fetch_limit = 0 if mode == "flash" else min(8 if mode == "dive" else 5, len(wave_sources))
-                fetch_candidates = wave_sources[:fetch_limit]
+                if comparison_task and mode != "flash":
+                    from .framework_comparison import prioritize_fetch_candidates
+                    fetch_candidates = prioritize_fetch_candidates(wave_sources, limit=min(15, len(wave_sources)))
+                    fetch_limit = len(fetch_candidates)
+                else:
+                    fetch_limit = 0 if mode == "flash" else min(8 if mode == "dive" else 5, len(wave_sources))
+                    fetch_candidates = wave_sources[:fetch_limit]
                 structured_candidates = [candidate for candidate in fetch_candidates if candidate.content_type == "application/json"]
                 fetchable_candidates = [candidate for candidate in fetch_candidates if candidate.content_type != "application/json"]
                 source_candidates.extend(structured_candidates)
@@ -663,7 +668,8 @@ class AgentWebEngine:
                         source_id = fetched.id if fetched else candidate.id
                         spans.append(self._span("extractor", "search_result_fetch", time.time(), operation_status, candidate.url, "search result fetched for grounding" if fetched else "search result retained without fetched body"))
                         actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": operation_status, "source_id": source_id, "wave": round_number})
-                source_candidates.extend(wave_sources[fetch_limit:])
+                fetched_ids = {candidate.id for candidate in fetch_candidates}
+                source_candidates.extend([candidate for candidate in wave_sources if candidate.id not in fetched_ids])
                 state = evidence_state(task, source_candidates)
                 research_trace.setdefault("queries", [])
                 research_trace["queries"] = list(dict.fromkeys([*research_trace["queries"], *wave_queries]))[:policy.max_queries]

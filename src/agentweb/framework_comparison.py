@@ -153,6 +153,23 @@ def _excerpt_for_facet(sources: list[Source], keywords: tuple[str, ...]) -> tupl
     return excerpt, source
 
 
+def prioritize_fetch_candidates(sources: list[Source], limit: int = 15) -> list[Source]:
+    """Select a bounded, framework-diverse set of official pages for fetching."""
+    grouped: dict[str, list[Source]] = {spec.key: [] for spec in FRAMEWORKS}
+    for source in sources:
+        spec = _framework_for_source(source, "")
+        if spec is not None:
+            grouped[spec.key].append(source)
+    selected: list[Source] = []
+    seen: set[str] = set()
+    for spec in FRAMEWORKS:
+        for source in grouped[spec.key][:3]:
+            if source.id not in seen:
+                selected.append(source)
+                seen.add(source.id)
+    return selected[:limit]
+
+
 def _official_sources(ranked_sources: list[RankedSource]) -> list[Source]:
     sources: list[Source] = []
     seen: set[str] = set()
@@ -166,15 +183,22 @@ def _official_sources(ranked_sources: list[RankedSource]) -> list[Source]:
     return sources
 
 
-def _citations_for_lines(answer: str, line_source_ids: list[list[str]]) -> list[Citation]:
+def _citations_for_lines(answer: str, line_source_ids: list[list[str]], references: list[Source]) -> list[Citation]:
     citations: list[Citation] = []
     offset = 0
     lines = answer.splitlines(keepends=True)
     for index, line in enumerate(lines):
         content = line.rstrip("\r\n")
-        ids = line_source_ids[index] if index < len(line_source_ids) else []
-        if content.strip() and ids:
-            citations.append(Citation(claim_span=[offset, offset + len(content)], source_ids=ids))
+        markers = list(re.finditer(r"\[(\d+)\](?!:)", content))
+        if markers:
+            for marker in markers:
+                reference_index = int(marker.group(1)) - 1
+                if 0 <= reference_index < len(references):
+                    citations.append(Citation(claim_span=[offset, offset + len(content)], source_ids=[references[reference_index].id]))
+        else:
+            ids = line_source_ids[index] if index < len(line_source_ids) else []
+            if content.strip() and ids:
+                citations.append(Citation(claim_span=[offset, offset + len(content)], source_ids=ids))
         offset += len(line)
     return citations
 
@@ -279,4 +303,4 @@ def build_comparison(ranked_sources: list[RankedSource], task: str) -> tuple[str
         "evidence_gaps": [item for item in unverified if "none" not in item],
         "unverified_policy": "Missing fields are explicitly marked Not verified; no claim is inferred from absence of evidence.",
     }
-    return answer, considered, _citations_for_lines(answer, line_ids), structured, score, [item for item in unverified if "none" not in item]
+    return answer, considered, _citations_for_lines(answer, line_ids, references), structured, score, [item for item in unverified if "none" not in item]
