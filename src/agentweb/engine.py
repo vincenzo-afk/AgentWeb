@@ -220,6 +220,28 @@ class AgentWebEngine:
                     continue
         return media
 
+    @staticmethod
+    def _evidence_segments(text: str) -> dict[str, str]:
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text) if part.strip()]
+        facet_terms = {
+            "version_release": ("version", "release", "changelog", "latest", "released", "v0.", "v1."),
+            "architecture": ("architecture", "agent loop", "graph", "workflow", "runtime", "event-driven", "orchestration"),
+            "tools": ("tool", "function calling", "function tool", "built-in tools", "tool wrapper", "extensions"),
+            "mcp": ("model context protocol", "mcp", "mcpworkbench", "mcp server", "mcp client"),
+            "state": ("memory", "context management", "session", "state", "checkpoint", "resume", "persistence"),
+            "multi_agent": ("multi-agent", "multi agent", "subagent", "subagents", "handoff", "agentchat", "agents as tools"),
+            "deployment": ("deploy", "deployment", "cloud", "vertex", "sandbox", "container", "docker", "platform", "managed"),
+            "limitations": ("limitation", "requires", "only", "experimental", "deprecated", "not supported", "terms"),
+            "licensing": ("license", "licence", "mit", "apache", "bsd", "commercial terms", "terms of service"),
+        }
+        segments: dict[str, str] = {}
+        lowered_sentences = [(sentence, sentence.lower()) for sentence in sentences]
+        for facet, terms in facet_terms.items():
+            matches = [sentence for sentence, lowered in lowered_sentences if any(term in lowered for term in terms)]
+            if matches:
+                segments[facet] = " ".join(matches[:3])[:1_500]
+        return segments
+
     def _source_from_url(self, url: str, org_id: str = "development", extraction_hints: dict | None = None) -> Source | None:
         decision = self.trust_engine.should_fetch(url)
         if not decision.allowed:
@@ -248,6 +270,9 @@ class AgentWebEngine:
             "tables": [table[:20] for table in parsed.tables[:5]],
             "entities": parsed.entities[:30],
         }
+        evidence_segments = self._evidence_segments(text)
+        if evidence_segments:
+            structured_data["evidence_segments"] = evidence_segments
         if media:
             structured_data["media"] = media
         if extraction_hints:

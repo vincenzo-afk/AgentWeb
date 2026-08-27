@@ -21,6 +21,10 @@ def _structured_evidence(source: Source) -> list[str]:
             values = [str(value).strip() for value in row if str(value).strip()]
             if values:
                 evidence.append(f"table {table_index}: " + " | ".join(values[:12]))
+    segments = data.get("evidence_segments") if isinstance(data.get("evidence_segments"), dict) else {}
+    for facet, segment in list(segments.items())[:12]:
+        if str(segment).strip():
+            evidence.append(f"{facet}: {str(segment)[:1_500]}")
     media = data.get("media") if isinstance(data.get("media"), dict) else {}
     for field in ("title", "description", "author", "publishDate", "uploadDate", "transcript_language"):
         value = media.get(field)
