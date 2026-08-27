@@ -206,6 +206,18 @@ class AgentWebTests(unittest.TestCase):
         self.assertIn("Hello", session.text)
         self.assertEqual(session.extracted[0]["text"], "Hello")
 
+    def test_structured_search_evidence_is_not_replaced_by_page_fetch(self):
+        class StructuredProvider:
+            last_metadata = {"branch_counts": {"quick_fact_apis": 1}}
+
+            def search_many(self, queries, mode, limit=10, freshness=None):
+                return [{"url": "https://api.example.test/france", "title": "France", "snippet": "France's capital is Paris.", "content_type": "application/json"}]
+
+        self.engine.search_provider = StructuredProvider()
+        result = self.engine.solve("What is the capital of France?", mode="focus", max_rounds=1)
+        self.assertTrue(any("Paris" in source.snippet for source in result.sources))
+        self.assertIn("Paris", result.answer)
+
     def test_provider_backed_search_is_injected_and_forwards_freshness(self):
         calls = []
 

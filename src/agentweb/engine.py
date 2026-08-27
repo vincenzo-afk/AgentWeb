@@ -643,9 +643,12 @@ class AgentWebEngine:
                         wave_sources.append(Source(id=self._source_id(item["url"]), url=item["url"], title=item.get("title", ""), snippet=item.get("snippet", ""), trust_score=self._trust_score(item["url"], item.get("title", "")), published_at=item.get("published_at"), content_type=item.get("content_type")))
                 fetch_limit = 0 if mode == "flash" else min(8 if mode == "dive" else 5, len(wave_sources))
                 fetch_candidates = wave_sources[:fetch_limit]
-                if fetch_candidates:
-                    with ThreadPoolExecutor(max_workers=min(policy.max_concurrency, len(fetch_candidates))) as pool:
-                        fetched_items = list(pool.map(lambda candidate: (candidate, self._source_from_url(candidate.url, org_id)), fetch_candidates))
+                structured_candidates = [candidate for candidate in fetch_candidates if candidate.content_type == "application/json"]
+                fetchable_candidates = [candidate for candidate in fetch_candidates if candidate.content_type != "application/json"]
+                source_candidates.extend(structured_candidates)
+                if fetchable_candidates:
+                    with ThreadPoolExecutor(max_workers=min(policy.max_concurrency, len(fetchable_candidates))) as pool:
+                        fetched_items = list(pool.map(lambda candidate: (candidate, self._source_from_url(candidate.url, org_id)), fetchable_candidates))
                     for candidate, fetched in fetched_items:
                         source_candidates.append(fetched or candidate)
                         operation_status = "complete" if fetched else "degraded"
