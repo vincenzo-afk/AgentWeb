@@ -146,6 +146,21 @@ def synthesize(ranked_sources: list[RankedSource], task: str, output_format: str
     """Produce a deterministic answer whose claims are covered by source citations."""
     if output_format not in SUPPORTED_OUTPUT_FORMATS:
         raise ValueError("output_format must be one of: text, comparison, timeline, json")
+    from .framework_comparison import build_comparison, is_framework_comparison
+    if is_framework_comparison(task):
+        answer, considered, citations, structured, score, gaps = build_comparison(ranked_sources, task)
+        cited_ids = {source_id for source in structured.get("references", []) for source_id in [source.get("id")]}
+        sources = [replace(source, cited=source.id in cited_ids) for source in considered]
+        return SynthesisResult(
+            answer=answer,
+            sources=sources,
+            citations=citations,
+            insufficient_evidence=score < 0.25,
+            output_format="comparison",
+            evidence_score=score,
+            conflicts=[],
+            structured_output=structured,
+        )
     considered = [item.source for item in ranked_sources]
     selected = [item.source for item in ranked_sources if item.include and (item.source.snippet.strip() or item.source.title.strip())][:10]
     score = _evidence_score(ranked_sources, selected)

@@ -214,7 +214,7 @@ class GeneralWebSearchTests(unittest.TestCase):
             result = OfficialDocumentationBranch().search("official OpenAI API documentation", 5)
         self.assertIn(rows[0]["url"], [row["url"] for row in result])
         self.assertNotIn(rows[1]["url"], [row["url"] for row in result])
-        self.assertTrue(all("platform.openai.com" in row["url"] or "openai.com" in row["url"] for row in result))
+        self.assertTrue(all(any(host in row["url"] for host in ("platform.openai.com", "developers.openai.com", "openai.github.io", "github.com/openai/", "openai.com")) for row in result))
 
     def test_capabilities_advertise_general_web_and_official_docs(self):
         payload = AgentWebMCPTools(object()).capabilities()

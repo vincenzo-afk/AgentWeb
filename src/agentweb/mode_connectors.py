@@ -128,13 +128,16 @@ class OfficialDocumentationBranch(_Branch):
 
     name = "official_documentation"
     _domain_hints = {
-        "claude": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
-        "anthropic": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
+        "claude agent sdk": ["code.claude.com", "docs.claude.com", "platform.claude.com", "github.com/anthropics", "anthropic.com"],
+        "claude": ["docs.claude.com", "platform.claude.com", "code.claude.com", "anthropic.com"],
+        "anthropic": ["docs.claude.com", "platform.claude.com", "code.claude.com", "anthropic.com"],
         "openai": ["platform.openai.com", "developers.openai.com", "openai.github.io", "openai.com"],
         "openai agents": ["openai.github.io", "developers.openai.com", "platform.openai.com", "openai.com"],
-        "google adk": ["adk.dev", "google.github.io", "ai.google.dev", "developers.googleblog.com"],
-        "adk": ["adk.dev", "google.github.io", "ai.google.dev"],
-        "langchain": ["langchain-ai.github.io", "python.langchain.com", "docs.langchain.com"],
+        "google adk": ["adk.dev", "google.github.io", "ai.google.dev", "docs.cloud.google.com", "github.com/google", "developers.googleblog.com"],
+        "agent development kit": ["adk.dev", "google.github.io", "ai.google.dev", "docs.cloud.google.com", "github.com/google"],
+        "adk": ["adk.dev", "google.github.io", "ai.google.dev", "docs.cloud.google.com"],
+        "langgraph": ["docs.langchain.com", "langchain-ai.github.io", "reference.langchain.com", "github.com/langchain-ai", "langchain.com"],
+        "langchain": ["langchain-ai.github.io", "python.langchain.com", "docs.langchain.com", "reference.langchain.com"],
         "autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
         "microsoft autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
         "mcp": ["modelcontextprotocol.io", "github.com/modelcontextprotocol"],
@@ -144,9 +147,15 @@ class OfficialDocumentationBranch(_Branch):
     }
 
     _seed_urls = {
+        "claude agent sdk": [
+            ("https://code.claude.com/docs/en/agent-sdk/overview", "Claude Agent SDK overview"),
+            ("https://github.com/anthropics/claude-agent-sdk-python/releases", "Claude Agent SDK Python releases"),
+            ("https://github.com/anthropics/claude-agent-sdk-python", "Claude Agent SDK Python repository"),
+        ],
         "claude": [
             ("https://platform.claude.com/docs/en/api/messages", "Claude Messages API reference"),
-            ("https://platform.claude.com/docs/en/api/overview", "Claude API overview"),
+            ("https://code.claude.com/docs/en/agent-sdk/overview", "Claude Agent SDK overview"),
+            ("https://github.com/anthropics/claude-agent-sdk-python/releases", "Claude Agent SDK Python releases"),
         ],
         "anthropic": [
             ("https://platform.claude.com/docs/en/api/messages", "Claude Messages API reference"),
@@ -154,6 +163,8 @@ class OfficialDocumentationBranch(_Branch):
         ],
         "openai": [
             ("https://platform.openai.com/docs/api-reference/responses", "OpenAI Responses API reference"),
+            ("https://developers.openai.com/api/docs/guides/agents", "OpenAI Agents guide"),
+            ("https://github.com/openai/openai-agents-python/releases", "OpenAI Agents SDK releases"),
             ("https://platform.openai.com/docs/overview", "OpenAI developer documentation"),
         ],
         "openai agents": [
@@ -162,17 +173,30 @@ class OfficialDocumentationBranch(_Branch):
         ],
         "google adk": [
             ("https://adk.dev/", "Google Agent Development Kit documentation"),
-            ("https://adk.dev/get-started/quickstart/", "Google ADK quickstart"),
+            ("https://github.com/google/adk-python/releases", "Google ADK Python releases"),
+            ("https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/adk", "Google ADK on Vertex AI Agent Engine"),
+        ],
+        "agent development kit": [
+            ("https://adk.dev/", "Google Agent Development Kit documentation"),
+            ("https://github.com/google/adk-python/releases", "Google ADK Python releases"),
         ],
         "adk": [
             ("https://adk.dev/", "Google Agent Development Kit documentation"),
         ],
+        "langgraph": [
+            ("https://docs.langchain.com/oss/python/langgraph/overview", "LangGraph overview"),
+            ("https://docs.langchain.com/oss/python/releases/changelog", "LangChain and LangGraph changelog"),
+            ("https://github.com/langchain-ai/langgraph/releases", "LangGraph releases"),
+        ],
         "langchain": [
-            ("https://docs.langchain.com/oss/python/langchain/retrieval", "LangChain retrieval documentation"),
-            ("https://www.langchain.com/retrieval", "LangChain retrieval overview"),
+            ("https://docs.langchain.com/oss/python/langgraph/overview", "LangGraph overview"),
+            ("https://docs.langchain.com/oss/python/releases/changelog", "LangChain and LangGraph changelog"),
+            ("https://github.com/langchain-ai/langgraph/releases", "LangGraph releases"),
         ],
         "autogen": [
             ("https://microsoft.github.io/autogen/stable/", "Microsoft AutoGen documentation"),
+            ("https://github.com/microsoft/autogen/releases", "Microsoft AutoGen releases"),
+            ("https://learn.microsoft.com/en-us/agent-framework/overview/", "Microsoft Agent Framework overview"),
             ("https://github.com/microsoft/autogen", "Microsoft AutoGen repository"),
         ],
         "microsoft autogen": [

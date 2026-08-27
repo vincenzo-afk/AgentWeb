@@ -615,11 +615,19 @@ class AgentWebEngine:
             tried_queries = 0
             search_wave_started = time.time()
             from concurrent.futures import ThreadPoolExecutor
+            from .framework_comparison import comparison_queries, is_framework_comparison
+            comparison_task = is_framework_comparison(task)
             for round_number in range(1, policy.max_rounds + 1):
                 if round_number == 1:
-                    wave_queries = [task]
-                    wave_query_count = initial_query_count
-                    raw_groups = [search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider, mode=mode, query_count=initial_query_count)]
+                    if comparison_task:
+                        wave_queries = comparison_queries(task)[:policy.max_queries]
+                        wave_query_count = len(wave_queries)
+                        with ThreadPoolExecutor(max_workers=min(policy.max_concurrency, len(wave_queries) or 1)) as pool:
+                            raw_groups = list(pool.map(lambda query: search(query, limit=search_limit, freshness=search_freshness, provider=self.search_provider, mode=mode, query_count=1), wave_queries))
+                    else:
+                        wave_queries = [task]
+                        wave_query_count = initial_query_count
+                        raw_groups = [search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider, mode=mode, query_count=initial_query_count)]
                 else:
                     state_before = evidence_state(task, source_candidates)
                     wave_queries = follow_up_queries(task, state_before, round_number)
@@ -728,6 +736,8 @@ class AgentWebEngine:
         self.memory.record_usage(org_id, mode)
         self.metrics.gauge("memory_reuse_rate", reuse_hits / max(1, len(requested_urls)), {"org_id": org_id})
         self.metrics.observe("cost_per_run", {"flash": 0.01, "focus": 0.05, "dive": 0.20, "monitor": 0.05}[mode], {"mode": mode, "org_id": org_id})
+        comparison_gaps = synthesis_result.structured_output.get("evidence_gaps", []) if isinstance(synthesis_result.structured_output, dict) else []
+        response_gaps = list(dict.fromkeys([str(item) for item in [*final_state.get("missing_families", []), *comparison_gaps]]))
         return SolveResponse(
             execution_id=execution_id,
             mode=mode,
@@ -750,7 +760,7 @@ class AgentWebEngine:
             },
             actions=actions,
             research_trace=research_trace,
-            evidence_gaps=[str(item) for item in final_state.get("missing_families", [])],
+            evidence_gaps=response_gaps,
             stop_reason=str(research_trace.get("stop_reason") or "ranking_complete"),
             next_research_actions=follow_up_queries(task, final_state, len(research_trace.get("waves", [])) + 1) if final_state.get("missing_families") else [],
         )
