@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from urllib.parse import urlparse
 
 from .models import Source
@@ -85,6 +86,18 @@ def rank(
             + 0.05 * _content_type_fit(source)
             + 0.05 * max(0.0, min(1.0, extraction_confidence))
         )
+        factual_query = bool(re.search(r"\b(?:capital|population|currency|flag)\b|\bwho is\b|\bwhat is\b", task_context.lower()))
+        if factual_query:
+            factual_text = f"{source.title} {source.snippet}"
+            answer_bearing = bool(re.search(r"\b(?:capital|population|currency|flag)\b.{0,120}\b(?:is|was|are|equals|stands at)\b", factual_text, re.IGNORECASE))
+            if answer_bearing:
+                score += 0.18
+            if source.content_type == "application/json":
+                score += 0.05
+            if urlparse(source.url).netloc.lower().endswith(("wikipedia.org", "wikidata.org", "restcountries.com")):
+                score += 0.05
+            if urlparse(source.url).netloc.lower() in {"github.com", "www.github.com"}:
+                score -= 0.12
         bias = (source_biases or {}).get(source.id, {})
         haystack = f"{source.title} {source.snippet} {source.url}".lower()
         boosts = bias.get("boost", []) if isinstance(bias, dict) else []

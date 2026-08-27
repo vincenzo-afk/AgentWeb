@@ -390,6 +390,14 @@ class AgentWebTests(unittest.TestCase):
         ]
         self.assertEqual(rank(sources, "research task")[0].source.id, "b")
 
+    def test_factual_ranking_promotes_exact_structured_answer(self):
+        from agentweb.models import Source
+        sources = [
+            Source("repo", "https://github.com/example/quiz", title="Quiz", snippet="What is the capital of France? Choose Paris.", trust_score=0.65),
+            Source("fact", "https://www.wikidata.org/wiki/Q142", title="France", snippet="France's capital is Paris.", trust_score=0.75, content_type="application/json"),
+        ]
+        self.assertEqual(rank(sources, "What is the capital of France?")[0].source.id, "fact")
+
     def test_planner_escalates_explicit_rendering_requests_to_browser(self):
         from agentweb.planner import Planner
 
