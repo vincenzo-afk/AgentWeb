@@ -69,3 +69,31 @@ class MCPGracefulErrorTests(unittest.TestCase):
         self.assertEqual(tools.research("test", "flash")["status"], "failed")
         self.assertEqual(tools.browser_open("https://example.com")["status"], "failed")
         self.assertEqual(tools.check_monitor("mon_missing")["error_type"], "MonitorNotFound")
+
+
+class _ParallelEngine:
+    def solve(self, task, **kwargs):
+        class Response:
+            def __init__(self, task):
+                self.task = task
+
+            def to_dict(self):
+                return {"task": self.task, "sources": [], "mode": "focus"}
+
+        return Response(task)
+
+
+class MediaAndParallelTests(unittest.TestCase):
+    def test_youtube_metadata_and_captions_are_parsed(self):
+        raw = b'''<html><head><meta property="og:title" content="Demo video"></head><body><script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"abc123","title":"Demo video","author":"Demo channel"},"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://video.example/captions","languageCode":"en"}]}}};</script></body></html>'''
+        from agentweb.parser import parse
+        parsed = parse(raw, "text/html")
+        self.assertEqual(parsed.media["videoId"], "abc123")
+        self.assertEqual(parsed.media["caption_tracks"][0]["language_code"], "en")
+
+    def test_parallel_research_returns_one_result_per_task(self):
+        tools = AgentWebMCPTools(_ParallelEngine())
+        result = tools.parallel_research(["one", "two", "three"], "focus", 3)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["task_count"], 3)
+        self.assertEqual([item["task"] for item in result["results"]], ["one", "two", "three"])

@@ -136,14 +136,14 @@ class Planner:
     @staticmethod
     def _generic_steps(task: str, mode: str, inputs: dict[str, Any]) -> tuple[PlanStep, ...]:
         urls = list(dict.fromkeys(_URL_RE.findall(task)))
-        max_sources = 5 if mode == "dive" else 3
+        max_sources = 8 if mode == "dive" else 5
         steps: list[PlanStep] = []
         if urls:
             step_type = "browser" if Planner._requires_browser(task) else "extract"
             steps.append(PlanStep(step_type, {"urls": urls[:max_sources], "max_sources": max_sources, "inputs": dict(inputs)}))
         steps.extend(
             [
-                PlanStep("search", {"limit": 5 if mode in {"focus", "dive", "monitor"} else 3, "query_count": Planner.query_count(mode), "include_github": True, "include_reddit": True}),
+                PlanStep("search", {"limit": 10 if mode in {"focus", "dive", "monitor"} else 4, "query_count": Planner.query_count(mode), "include_github": True, "include_reddit": True}),
                 PlanStep("rank", {}),
                 PlanStep("synthesize", {}),
             ]
@@ -180,7 +180,7 @@ class Planner:
         estimated_mode = mode or (selected.default_mode if selected else self._mode(intent, task))
         if selected:
             raw_steps = selected.build_steps(task, inputs)
-            task_urls = list(dict.fromkeys(_URL_RE.findall(task)))[:5 if estimated_mode == "dive" else 3]
+            task_urls = list(dict.fromkeys(_URL_RE.findall(task)))[:8 if estimated_mode == "dive" else 5]
             for item in raw_steps:
                 params = item.setdefault("params", {})
                 if item["type"] == "search":

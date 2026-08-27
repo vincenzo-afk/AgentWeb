@@ -32,13 +32,15 @@ class AgentWebMCPTools:
     def capabilities(self) -> dict:
         return {
             "modes": {
-                "flash": {"semantic_queries": 2, "fetch_pages": 3, "description": "fast answer with light retrieval"},
-                "focus": {"semantic_queries": 4, "fetch_pages": 8, "description": "multi-source grounded answer"},
-                "dive": {"semantic_queries": 6, "fetch_pages": 14, "description": "deep research across public source types"},
+                "flash": {"semantic_queries": 2, "fetch_pages": 4, "selected_sources": 2, "description": "fast answer with light retrieval"},
+                "focus": {"semantic_queries": 4, "fetch_pages": 10, "selected_sources": 6, "description": "multi-source grounded answer"},
+                "dive": {"semantic_queries": 6, "fetch_pages": 18, "selected_sources": 10, "description": "deep research across public source types"},
                 "monitor": {"semantic_queries": "adaptive", "description": "scheduled diff checks and public-source monitoring"},
             },
             "always_on_branches": ["github_api", "reddit_json"],
             "public_branches": ["github_api", "reddit_json", "duckduckgo_instant_answer", "wikidata", "wikipedia_api", "quick_fact_apis", "stack_exchange_network", "academic_apis", "arxiv", "pubmed_eutilities", "openreview_net", "dbpedia_sparql", "wayback_cdx", "open_library", "project_gutenberg"],
+            "parallel_research": {"max_tasks": 12, "max_concurrency": 8, "description": "run independent public research tasks concurrently"},
+            "media_support": {"youtube": "metadata and public captions when exposed", "generic_video": "OpenGraph media metadata", "credentials": "not accepted"},
             "excluded_self_hosted_or_keyed": ["see selfhosting.md"],
         }
 
@@ -49,6 +51,17 @@ class AgentWebMCPTools:
             return response.to_dict()
         except Exception as error:
             return {"status": "failed", "error": str(error) or type(error).__name__, "error_type": type(error).__name__, "mode": mode}
+
+    def parallel_research(self, tasks: list[str], mode: ResearchMode = "focus", max_concurrency: int = 4) -> dict:
+        if not isinstance(tasks, list) or not tasks or len(tasks) > 12:
+            raise ValueError("tasks must contain between 1 and 12 items")
+        normalized_tasks = [_bounded_text(task, field="task", maximum=2_000) for task in tasks]
+        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int) or not 1 <= max_concurrency <= 8:
+            raise ValueError("max_concurrency must be an integer between 1 and 8")
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(max_concurrency, len(normalized_tasks))) as pool:
+            results = list(pool.map(lambda task: self.research(task, mode), normalized_tasks))
+        return {"status": "complete", "mode": mode, "task_count": len(results), "results": results}
 
     def extract_page(self, url: str, requested_schema: dict | None = None) -> dict:
         normalized_url = _bounded_text(url, field="url", maximum=2_048)
@@ -119,8 +132,13 @@ def create_mcp_server(engine: AgentWebEngine | None = None) -> MCPServer:
 
     @mcp.tool()
     def agentweb_research(task: str, mode: ResearchMode = "focus") -> dict:
-        """Research a question with Flash, Focus, Dive, or Monitor retrieval behavior."""
+        """Research a question with Flash, Focus, Dive, or Monitor retrieval behavior. Use agentweb_parallel_research for independent tasks."""
         return tools.research(task, mode)
+
+    @mcp.tool()
+    def agentweb_parallel_research(tasks: list[str], mode: ResearchMode = "focus", max_concurrency: int = 4) -> dict:
+        """Run up to twelve independent public research tasks concurrently."""
+        return tools.parallel_research(tasks, mode, max_concurrency)
 
     @mcp.tool()
     def agentweb_extract_page(url: str, requested_schema: dict | None = None) -> dict:

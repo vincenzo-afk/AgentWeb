@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: agentweb-mcp
+    runtime: python
+    region: singapore
+    plan: free
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install .
+    startCommand: python -m agentweb.mcp_server --transport streamable-http --host 0.0.0.0 --port ${PORT:-10000} --data ${AGENTWEB_DATA_PATH:-/tmp/agentweb.sqlite3}
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: AGENTWEB_DATA_PATH
+        value: /tmp/agentweb.sqlite3

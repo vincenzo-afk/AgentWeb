@@ -513,16 +513,16 @@ class AgentWebTests(unittest.TestCase):
         dive = self.engine.solve("Find the latest AgentWeb result", mode="dive")
 
         self.assertEqual(provider.calls, [
-            ("Find the latest AgentWeb result", 3, None),
-            ("Find the latest AgentWeb result", 5, None),
-            ("Find the latest AgentWeb result", 5, None),
+            ("Find the latest AgentWeb result", 4, None),
+            ("Find the latest AgentWeb result", 10, None),
+            ("Find the latest AgentWeb result", 10, None),
         ])
-        self.assertEqual(flash.selection_logic["source_limit"], 1)
+        self.assertEqual(flash.selection_logic["source_limit"], 2)
         self.assertFalse(any(action["operation"] == "search_result_fetch" for action in flash.actions))
-        self.assertEqual(sum(action["operation"] == "search_result_fetch" for action in focus.actions), 3)
-        self.assertEqual(focus.selection_logic["source_limit"], 3)
+        self.assertEqual(sum(action["operation"] == "search_result_fetch" for action in focus.actions), 5)
+        self.assertEqual(focus.selection_logic["source_limit"], 6)
         self.assertEqual(sum(action["operation"] == "search_result_fetch" for action in dive.actions), 5)
-        self.assertEqual(dive.selection_logic["source_limit"], 5)
+        self.assertEqual(dive.selection_logic["source_limit"], 10)
         self.assertTrue(all(action["status"] == "complete" for response in (focus, dive) for action in response.actions if action["operation"] == "search_result_fetch"))
 
     def test_solve_exposes_secret_safe_execution_transparency(self):
@@ -532,7 +532,7 @@ class AgentWebTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["skill"], "source_summary")
         self.assertEqual([step["type"] for step in payload["plan"]["steps"]], ["extract", "search", "rank", "synthesize"])
         self.assertEqual(payload["selection_logic"]["source_strategy"], "direct_url_reuse_then_fetch")
-        self.assertEqual(payload["selection_logic"]["source_limit"], 3)
+        self.assertEqual(payload["selection_logic"]["source_limit"], 6)
         self.assertTrue(any(action["tool"] == "extractor" for action in payload["actions"]))
         self.assertTrue(any(action["tool"] == "ranking" and action["selected_source_ids"] for action in payload["actions"]))
         self.assertTrue(any(action["tool"] == "synthesis" for action in payload["actions"]))

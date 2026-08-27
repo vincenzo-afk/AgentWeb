@@ -52,11 +52,11 @@ The repository also includes the OpenAPI contract in [`openapi/openapi.yaml`](op
 
 ## Four-mode MCP interface
 
-The bundled MCP server exposes `agentweb_capabilities`, `agentweb_research`, `agentweb_extract_page`, `agentweb_crawl`, `agentweb_browser_open`, `agentweb_create_monitor`, `agentweb_check_monitor`, `agentweb_list_monitors`, `agentweb_create_plan`, and `agentweb_execute_plan`. Research supports `flash`, `focus`, `dive`, and `monitor`.
+The bundled MCP server exposes `agentweb_capabilities`, `agentweb_research`, `agentweb_parallel_research`, `agentweb_extract_page`, `agentweb_crawl`, `agentweb_browser_open`, `agentweb_create_monitor`, `agentweb_check_monitor`, `agentweb_list_monitors`, `agentweb_create_plan`, and `agentweb_execute_plan`. Research supports `flash`, `focus`, `dive`, and `monitor`; Focus and Dive retain up to six and ten selected sources respectively, while independent tasks can be submitted concurrently through `agentweb_parallel_research`.
 
 Flash generates up to two semantic query variants and performs light retrieval. Focus generates four variants and performs a concurrent multi-source fetch batch. Dive generates six variants and fans out across public technical, discussion, academic, archival, and long-form branches. Monitor supports durable scheduled checks and adaptive public-source discovery. GitHub and Reddit are default branches in every mode; result URLs are merged and deduplicated before ranking.
 
-Self-hosted and credentialed integrations are intentionally not enabled in the default runtime. See [`selfhosting.md`](selfhosting.md) for the complete exclusion list and integration boundaries. The supplied inventory is preserved in [`AgentWeb-mode-tool-map.md`](AgentWeb-mode-tool-map.md).
+Direct public video URLs are supported through OpenGraph and YouTube player metadata. When a public YouTube page exposes caption tracks, AgentWeb attempts to fetch and include the caption transcript as grounded evidence; private, gated, or unavailable captions are reported as unavailable rather than bypassed. Self-hosted and credentialed integrations are intentionally not enabled in the default runtime. See [`selfhosting.md`](selfhosting.md) for the complete exclusion list and integration boundaries. The supplied inventory is preserved in [`AgentWeb-mode-tool-map.md`](AgentWeb-mode-tool-map.md). Render deployment defaults are provided in [`render.yaml`](render.yaml).
 
 Run the MCP server over stdio with:
 

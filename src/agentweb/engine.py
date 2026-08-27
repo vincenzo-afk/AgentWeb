@@ -26,7 +26,7 @@ from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
 from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .synthesis import synthesize
-from .parser import parse
+from .parser import extract_caption_text, parse
 from .planner import Plan, PlanStore, Planner
 from .plugins import PluginRegistry
 from .ranking import rank
@@ -159,6 +159,37 @@ class AgentWebEngine:
             extraction_confidence=0.70,
         )
 
+    @staticmethod
+    def _youtube_media(parsed_media: dict | None) -> dict[str, object] | None:
+        if not isinstance(parsed_media, dict):
+            return None
+        media = deepcopy(parsed_media)
+        tracks = media.get("caption_tracks") if isinstance(media.get("caption_tracks"), list) else []
+        if tracks:
+            media["caption_tracks"] = tracks[:10]
+        return media or None
+
+    def _enrich_media(self, parsed_media: dict | None) -> dict[str, object] | None:
+        media = self._youtube_media(parsed_media)
+        if not media:
+            return None
+        tracks = media.get("caption_tracks") if isinstance(media.get("caption_tracks"), list) else []
+        if tracks and not media.get("transcript"):
+            for track in tracks[:3]:
+                caption_url = track.get("base_url") if isinstance(track, dict) else None
+                if not isinstance(caption_url, str) or not caption_url.startswith(("http://", "https://")):
+                    continue
+                try:
+                    caption_result = fetch_url(caption_url, timeout=8.0, trust_engine=self.trust_engine, max_attempts=2)
+                    transcript = extract_caption_text(caption_result.body) if caption_result.body else ""
+                    if transcript:
+                        media["transcript"] = transcript
+                        media["transcript_language"] = track.get("language_code") if isinstance(track, dict) else None
+                        break
+                except Exception:
+                    continue
+        return media
+
     def _source_from_url(self, url: str, org_id: str = "development", extraction_hints: dict | None = None) -> Source | None:
         decision = self.trust_engine.should_fetch(url)
         if not decision.allowed:
@@ -167,10 +198,13 @@ class AgentWebEngine:
         if result.error and not result.body:
             return None
         parsed = parse(result.body.encode("utf-8"), result.content_type)
+        media = self._enrich_media(parsed.media)
         title = parsed.title
         if not title:
             title, _ = extract_metadata(result.body)
         text = parsed.text or html_to_text(result.body)
+        if media and media.get("transcript"):
+            text = (text + "\n\nTranscript:\n" + str(media["transcript"])).strip()
         surface = self.trust_engine.should_surface(text)
         if not surface.allowed:
             return None
@@ -179,6 +213,8 @@ class AgentWebEngine:
             "tables": [table[:20] for table in parsed.tables[:5]],
             "entities": parsed.entities[:30],
         }
+        if media:
+            structured_data["media"] = media
         if extraction_hints:
             connector_fields: dict[str, object] = {}
             for field, expected_type in list(extraction_hints.items())[:20]:
@@ -274,9 +310,12 @@ class AgentWebEngine:
         if result.error:
             raise RuntimeError(f"could not fetch URL: {redact_text(result.error)}")
         parsed = parse(result.body.encode("utf-8"), result.content_type)
+        media = self._enrich_media(parsed.media)
         title = parsed.title
         description = extract_metadata(result.body)[1]
         text = parsed.text or html_to_text(result.body)
+        if media and media.get("transcript"):
+            text = (text + "\n\nTranscript:\n" + str(media["transcript"])).strip()
         base_confidence = 0.85 if text else 0.20
         confidence_reasons = ["main text extracted" if text else "main text is empty"]
         if parsed.parse_warnings:
@@ -309,6 +348,8 @@ class AgentWebEngine:
             "confidence_reasons": confidence_reasons,
             "trust_score": self._trust_score(result.url, title),
         }
+        if media:
+            data["media"] = media
         if requested_schema:
             structured: dict[str, dict] = {}
             for field, expected_type in requested_schema.items():
@@ -473,7 +514,7 @@ class AgentWebEngine:
             source_candidates.extend(graph_sources)
             actions.append({"tool": "graph", "operation": "query", "status": "complete", "node_count": len(graph_result.nodes), "edge_count": len(graph_result.edges), "depth": int(graph_context.get("depth", 1))})
         reuse_hits = 0
-        max_retrievals = 5 if mode == "dive" else 3
+        max_retrievals = 8 if mode == "dive" else 5
         retrieval_batch = retrieval_calls[:max_retrievals]
 
         def retrieve_one(item):
@@ -538,7 +579,7 @@ class AgentWebEngine:
                     )
                 )
             if mode in {"focus", "dive", "monitor"}:
-                follow_up_limit = 3 if mode in {"focus", "monitor"} else 5
+                follow_up_limit = 5 if mode in {"focus", "monitor"} else 8
                 candidates = search_sources[:follow_up_limit]
                 from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=min(8, len(candidates) or 1)) as pool:
@@ -558,7 +599,7 @@ class AgentWebEngine:
 
         ranked = rank(source_candidates, task, ranking_biases, plugins=self.plugins, org_id=org_id)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
-        limit = 1 if mode == "flash" else 3 if mode in {"focus", "monitor"} else 5
+        limit = 2 if mode == "flash" else 6 if mode == "focus" else 10 if mode == "dive" else 6
         selected = [item for item in ranked if item.include][:limit]
         actions.append(
             {

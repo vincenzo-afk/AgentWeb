@@ -34,12 +34,20 @@ def _structured_evidence(source: Source) -> list[str]:
     for entity in data.get("entities", [])[:10]:
         if str(entity).strip():
             evidence.append(f"entity: {str(entity).strip()}")
-    for table_index, table in enumerate(data.get("tables", [])[:3], start=1):
-        for row in table[:5]:
+    for table_index, table in enumerate(data.get("tables", [])[:5], start=1):
+        for row in table[:8]:
             values = [str(value).strip() for value in row if str(value).strip()]
             if values:
-                evidence.append(f"table {table_index}: " + " | ".join(values[:10]))
-    return evidence[:20]
+                evidence.append(f"table {table_index}: " + " | ".join(values[:12]))
+    media = data.get("media") if isinstance(data.get("media"), dict) else {}
+    for field in ("title", "description", "author", "channelId", "publishDate", "uploadDate", "lengthSeconds", "viewCount", "transcript_language"):
+        value = media.get(field)
+        if value not in (None, ""):
+            evidence.append(f"media {field}: {str(value)[:500]}")
+    transcript = media.get("transcript")
+    if isinstance(transcript, str) and transcript.strip():
+        evidence.append("media transcript: " + transcript[:2_000])
+    return evidence[:40]
 
 
 def _signals(source: Source) -> list[tuple[str, str]]:
@@ -75,7 +83,7 @@ def _render_text(task: str, sources: list[Source], conflicts: list[dict[str, Any
     answer = (
         f"AgentWeb reviewed {len(sources)} source(s) for this task: {task}\n\n"
         + "\n".join(
-            f"{index}. {source.title or source.url} — {source.snippet[:280]}"
+            f"{index}. {source.title or source.url} — {source.snippet[:700]}"
             + ("\n" + "\n".join(f"   {source.id}: {claim}" for claim in _structured_evidence(source)) if _structured_evidence(source) else "")
             for index, source in enumerate(sources, start=1)
         )
@@ -93,9 +101,9 @@ def _render_comparison(task: str, sources: list[Source], conflicts: list[dict[st
     items = []
     for source in sources:
         label = source.title or source.url
-        evidence = source.snippet.replace("|", "\\|")[:280]
+        evidence = source.snippet.replace("|", "\\|")[:700]
         rows.append(f"| {label} | {source.trust_score:.2f} | {evidence} |")
-        items.append({"source_id": source.id, "title": source.title, "url": source.url, "trust_score": source.trust_score, "evidence": source.snippet[:280], "structured_evidence": _structured_evidence(source)})
+        items.append({"source_id": source.id, "title": source.title, "url": source.url, "trust_score": source.trust_score, "evidence": source.snippet[:700], "structured_evidence": _structured_evidence(source)})
     if conflicts:
         rows.append("")
         rows.append("**Conflicts:** " + "; ".join(item["field"] for item in conflicts))
@@ -103,7 +111,7 @@ def _render_comparison(task: str, sources: list[Source], conflicts: list[dict[st
 
 
 def _render_timeline(task: str, sources: list[Source], conflicts: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
-    items = [{"source_id": source.id, "label": source.title or source.url, "evidence": source.snippet[:280], "structured_evidence": _structured_evidence(source)} for source in sources]
+    items = [{"source_id": source.id, "label": source.title or source.url, "evidence": source.snippet[:700], "structured_evidence": _structured_evidence(source)} for source in sources]
     answer = f"Timeline-style evidence for: {task}\n\n" + "\n".join(
         f"{index}. {item['label']} — {item['evidence']}" for index, item in enumerate(items, start=1)
     )
@@ -139,7 +147,7 @@ def synthesize(ranked_sources: list[RankedSource], task: str, output_format: str
     if output_format not in SUPPORTED_OUTPUT_FORMATS:
         raise ValueError("output_format must be one of: text, comparison, timeline, json")
     considered = [item.source for item in ranked_sources]
-    selected = [item.source for item in ranked_sources if item.include and (item.source.snippet.strip() or item.source.title.strip())][:5]
+    selected = [item.source for item in ranked_sources if item.include and (item.source.snippet.strip() or item.source.title.strip())][:10]
     score = _evidence_score(ranked_sources, selected)
     if not selected or score < 0.25:
         return SynthesisResult(
@@ -164,7 +172,7 @@ def synthesize(ranked_sources: list[RankedSource], task: str, output_format: str
     else:
         structured = {
             "task": task,
-            "sources": [{"id": source.id, "url": source.url, "title": source.title, "snippet": source.snippet[:280], "structured_evidence": _structured_evidence(source)} for source in selected],
+            "sources": [{"id": source.id, "url": source.url, "title": source.title, "snippet": source.snippet[:700], "structured_evidence": _structured_evidence(source)} for source in selected],
             "conflicts": conflicts,
         }
         answer = json.dumps(structured, ensure_ascii=False, sort_keys=True)
