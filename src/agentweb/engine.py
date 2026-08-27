@@ -32,6 +32,7 @@ from .synthesis import synthesize
 from .parser import extract_caption_text, parse
 from .planner import Plan, PlanStore, Planner
 from .plugins import PluginRegistry
+from .quality import factual_gate, host_matches, official_target_hosts
 from .ranking import rank
 from .router import Router
 from .redaction import redact_text, redact_url
@@ -716,7 +717,14 @@ class AgentWebEngine:
         ranked = rank(source_candidates, task, ranking_biases, plugins=self.plugins, org_id=org_id)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
         limit = 2 if mode == "flash" else 6 if mode == "focus" else 10 if mode == "dive" else 6
-        selected = [item for item in ranked if item.include][:limit]
+        eligible = [item for item in ranked if item.include]
+        target_hosts = official_target_hosts(task)
+        if target_hosts:
+            targeted = [item for item in eligible if host_matches(item.source.url, target_hosts)]
+            remainder = [item for item in eligible if item not in targeted]
+            selected = (targeted + remainder)[:limit] if targeted else eligible[:limit]
+        else:
+            selected = eligible[:limit]
         actions.append(
             {
                 "tool": "ranking",
@@ -728,13 +736,21 @@ class AgentWebEngine:
             }
         )
         final_state = evidence_state(task, [item.source for item in ranked])
+        gate = factual_gate(task, [item.source for item in selected])
+        research_trace["factual_gate"] = {"required": gate.required, "supported": gate.supported, "reason": gate.reason}
+        if gate.required and not gate.supported:
+            selected = []
+            final_state.setdefault("missing_families", []).append("factual_claim_support")
+            research_trace["stop_reason"] = "factual_evidence_gate_failed"
+            actions.append({"tool": "quality", "operation": "factual_evidence_gate", "status": "failed", "reason": gate.reason})
         research_trace["final_evidence"] = final_state
         research_trace["candidate_count"] = len(source_candidates)
         research_trace["ranked_count"] = len(ranked)
         research_trace["selected_count"] = len(selected)
         if research_trace.get("stop_reason") == "not_started":
             research_trace["stop_reason"] = "ranking_complete"
-        synthesis_result = synthesize(ranked if include_all_evidence else selected, task, synthesis_format)
+        synthesis_inputs = ranked if include_all_evidence and not (gate.required and not gate.supported) else selected
+        synthesis_result = synthesize(synthesis_inputs, task, synthesis_format)
         spans.append(
             self._span(
                 "synthesis",

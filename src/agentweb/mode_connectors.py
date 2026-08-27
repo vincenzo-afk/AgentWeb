@@ -574,11 +574,10 @@ class BranchSearchProvider:
                             if priority.get(name, 50) < priority.get(str(current.get("_branch", "")), 50):
                                 current["_branch"] = name
                                 current["title"] = candidate["title"] or current.get("title", "")
-                                current["snippet"] = candidate["snippet"] or current.get("snippet", "")
                                 for key in ("published_at", "content_type"):
                                     if candidate.get(key):
                                         current[key] = candidate[key]
-                            elif len(candidate.get("snippet", "")) > len(current.get("snippet", "")):
+                            if len(candidate.get("snippet", "")) > len(current.get("snippet", "")):
                                 current["snippet"] = candidate["snippet"]
                             for key in ("published_at", "content_type"):
                                 if candidate.get(key) and not current.get(key):

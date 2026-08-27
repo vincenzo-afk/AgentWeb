@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from .models import Source
 from .plugins import PluginRegistry
+from .quality import host_matches, is_official_intent, official_target_hosts
 
 
 @dataclass
@@ -95,10 +96,16 @@ def rank(
             + 0.05 * _content_type_fit(source)
             + 0.05 * max(0.0, min(1.0, extraction_confidence))
         )
-        documentation_query = bool(re.search(r"\b(?:official|documentation|docs|reference|api|sdk|guide|framework)\b", task_context.lower()))
+        documentation_query = is_official_intent(task_context)
         hostname = urlparse(source.url).hostname.lower().rstrip(".") if urlparse(source.url).hostname else ""
         if documentation_query and (hostname in _OFFICIAL_DOCUMENTATION_HOSTS or any(hostname.endswith("." + host) for host in _OFFICIAL_DOCUMENTATION_HOSTS)):
             score += 0.15
+        target_hosts = official_target_hosts(task_context)
+        if target_hosts:
+            if host_matches(source.url, target_hosts):
+                score += 0.28
+            else:
+                score -= 0.08
         factual_query = bool(re.search(r"\b(?:capital|population|currency|flag)\b|\bwho is\b|\bwhat is\b", task_context.lower()))
         if factual_query:
             factual_text = f"{source.title} {source.snippet}"
