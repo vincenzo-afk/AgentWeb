@@ -11,6 +11,7 @@ import uuid
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .adaptive import ResearchPolicy, evidence_state, follow_up_queries, should_continue
 from .alerting import DeliveryResult, send_webhook
 from .auth import KeyStore
 from .browser import BrowserEngine
@@ -24,6 +25,7 @@ from .learning import LearningStore
 from .memory import MemoryStore
 from .maintenance import purge_retention
 from .metrics import MetricStore, MetricsRegistry, PostgresMetricStore
+from .model_router import ModelRouter
 from .models import Citation, Monitor, SolveResponse, Source, utc_now
 from .normalizer import normalize
 from .synthesis import synthesize
@@ -68,6 +70,7 @@ class AgentWebEngine:
         self.credentials = BrowserCredentialStore(self.memory.path, self.secret_provider)
         self.session_states = BrowserSessionStore(self.memory.path, self.secret_provider)
         self.search_provider = search_provider or build_search_provider(self.secret_provider)
+        self.model_router = ModelRouter()
         self.plugins = PluginRegistry()
         self.planner = Planner(plugins=self.plugins)
         self.connectors = ConnectorRegistry()
@@ -513,6 +516,10 @@ class AgentWebEngine:
         skill: str | None = None,
         inputs: dict | None = None,
         planned_plan: Plan | None = None,
+        max_rounds: int | None = None,
+        max_concurrency: int | None = None,
+        evidence_target: int | None = None,
+        include_all_evidence: bool = True,
     ) -> SolveResponse:
         task = task.strip() if isinstance(task, str) else task
         plan = planned_plan or self.planner.plan(task, mode, skill, inputs, org_id=org_id)
@@ -543,6 +550,10 @@ class AgentWebEngine:
         source_candidates: list[Source] = []
         ranking_biases: dict[str, dict] = {}
         actions: list[dict[str, object]] = [{"tool": "router", "operation": "route", "status": "complete", "call_count": len(tool_calls)}]
+        policy = ResearchPolicy.for_mode(mode, max_rounds=max_rounds, max_concurrency=max_concurrency)
+        if evidence_target is not None:
+            policy = ResearchPolicy(mode=policy.mode, max_rounds=policy.max_rounds, max_queries=policy.max_queries, max_candidates=policy.max_candidates, target_sources=max(1, min(int(evidence_target), 12)), min_evidence_score=policy.min_evidence_score, max_seconds=policy.max_seconds, max_concurrency=policy.max_concurrency)
+        research_trace: dict[str, object] = {"mode": mode, "policy": {"max_rounds": policy.max_rounds, "max_queries": policy.max_queries, "max_candidates": policy.max_candidates, "target_sources": policy.target_sources, "min_evidence_score": policy.min_evidence_score, "max_seconds": policy.max_seconds, "max_concurrency": policy.max_concurrency}, "waves": [], "model_router": self.model_router.status(), "stop_reason": "not_started"}
         graph_context = self._graph_query_inputs(inputs)
         if graph_context is not None:
             graph_result = self.graph.query(org_id=org_id, **graph_context)
@@ -591,47 +602,74 @@ class AgentWebEngine:
                     if isinstance(params.get("ranking_bias"), dict):
                         ranking_biases[source.id] = params["ranking_bias"]
 
-        if not source_candidates and any(call.tool == "search" for call in tool_calls):
-            search_started = time.time()
-            search_call = next(call for call in tool_calls if call.tool == "search")
-            search_limit = search_call.params.get("limit", 5 if mode in {"focus", "dive", "monitor"} else 3)
+        search_call = next((call for call in tool_calls if call.tool == "search"), None)
+        lowered_task = task.lower()
+        explicit_research_intent = any(term in lowered_task for term in ("research", "compare", "comparison", "sources", "evidence", "verify", "latest", "current", "trend", "investigate"))
+        media_url_task = any(urlparse(url).netloc.lower().split(":", 1)[0] in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be", "vimeo.com", "www.vimeo.com"} for url in requested_urls)
+        should_search = search_call is not None and ((not requested_urls and graph_context is None) or explicit_research_intent or media_url_task)
+        if should_search:
+            search_limit = int(search_call.params.get("limit", 10 if mode in {"focus", "dive", "monitor"} else 4))
             search_freshness = search_call.params.get("freshness")
-            query_count = search_call.params.get("query_count")
-            search_results = search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider, mode=mode, query_count=query_count)
-            spans.append(self._span("search", "semantic_parallel_search" if query_count else "search", search_started, "complete", task, f"{len(search_results)} result(s)"))
-            metadata = getattr(self.search_provider, "last_metadata", None)
-            actions.append({"tool": "search", "operation": "semantic_parallel_search" if query_count else "search", "status": "complete", "result_count": len(search_results), "query_count": query_count, "metadata": metadata if isinstance(metadata, dict) else None})
-            search_sources: list[Source] = []
-            for item in search_results:
-                search_sources.append(
-                    Source(
-                        id=self._source_id(item["url"]),
-                        url=item["url"],
-                        title=item.get("title", ""),
-                        snippet=item.get("snippet", ""),
-                        trust_score=self._trust_score(item["url"], item.get("title", "")),
-                        published_at=item.get("published_at"),
-                        content_type=item.get("content_type"),
-                    )
-                )
-            if mode in {"focus", "dive", "monitor"}:
-                follow_up_limit = 5 if mode in {"focus", "monitor"} else 8
-                candidates = search_sources[:follow_up_limit]
-                from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=min(8, len(candidates) or 1)) as pool:
-                    fetched_items = list(pool.map(lambda candidate: (candidate, self._source_from_url(candidate.url, org_id)), candidates))
-                enriched: list[Source] = []
-                for candidate, fetched in fetched_items:
-                    if fetched is not None:
-                        enriched.append(fetched)
-                        spans.append(self._span("extractor", "search_result_fetch", time.time(), "complete", candidate.url, "search result fetched for grounding"))
-                        actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": "complete", "source_id": fetched.id})
-                    else:
-                        enriched.append(candidate)
-                        spans.append(self._span("extractor", "search_result_fetch", time.time(), "degraded", candidate.url, "search result retained without fetched body"))
-                        actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": "degraded", "source_id": candidate.id})
-                search_sources = enriched + search_sources[follow_up_limit:]
-            source_candidates.extend(search_sources)
+            initial_query_count = int(search_call.params.get("query_count") or 1)
+            seen_urls = {source.url for source in source_candidates}
+            tried_queries = 0
+            search_wave_started = time.time()
+            from concurrent.futures import ThreadPoolExecutor
+            for round_number in range(1, policy.max_rounds + 1):
+                if round_number == 1:
+                    wave_queries = [task]
+                    wave_query_count = initial_query_count
+                    raw_groups = [search(task, limit=search_limit, freshness=search_freshness, provider=self.search_provider, mode=mode, query_count=initial_query_count)]
+                else:
+                    state_before = evidence_state(task, source_candidates)
+                    wave_queries = follow_up_queries(task, state_before, round_number)
+                    model_needed = self.model_router.enabled and (len(state_before.get("missing_families", [])) >= 2 or float(state_before.get("score", 0.0)) < 0.45 or round_number >= 3)
+                    if model_needed:
+                        model_queries, decision = self.model_router.suggest_queries(task, list(research_trace.get("queries", [])), list(state_before.get("missing_families", [])), max_queries=4)
+                        wave_queries = list(dict.fromkeys(wave_queries + model_queries))[:4]
+                        research_trace["model_router"] = {**self.model_router.status(), "last_decision": decision.reason}
+                    elif self.model_router.enabled:
+                        research_trace["model_router"] = {**self.model_router.status(), "last_decision": "skipped:evidence_gap_small"}
+                    wave_query_count = len(wave_queries)
+                    with ThreadPoolExecutor(max_workers=min(policy.max_concurrency, len(wave_queries) or 1)) as pool:
+                        raw_groups = list(pool.map(lambda query: search(query, limit=search_limit, freshness=search_freshness, provider=self.search_provider, mode=mode, query_count=1), wave_queries))
+                tried_queries += wave_query_count
+                wave_sources: list[Source] = []
+                for results in raw_groups:
+                    for item in results:
+                        if not isinstance(item, dict) or not isinstance(item.get("url"), str) or item["url"] in seen_urls:
+                            continue
+                        seen_urls.add(item["url"])
+                        wave_sources.append(Source(id=self._source_id(item["url"]), url=item["url"], title=item.get("title", ""), snippet=item.get("snippet", ""), trust_score=self._trust_score(item["url"], item.get("title", "")), published_at=item.get("published_at"), content_type=item.get("content_type")))
+                fetch_limit = 0 if mode == "flash" else min(8 if mode == "dive" else 5, len(wave_sources))
+                fetch_candidates = wave_sources[:fetch_limit]
+                if fetch_candidates:
+                    with ThreadPoolExecutor(max_workers=min(policy.max_concurrency, len(fetch_candidates))) as pool:
+                        fetched_items = list(pool.map(lambda candidate: (candidate, self._source_from_url(candidate.url, org_id)), fetch_candidates))
+                    for candidate, fetched in fetched_items:
+                        source_candidates.append(fetched or candidate)
+                        operation_status = "complete" if fetched else "degraded"
+                        source_id = fetched.id if fetched else candidate.id
+                        spans.append(self._span("extractor", "search_result_fetch", time.time(), operation_status, candidate.url, "search result fetched for grounding" if fetched else "search result retained without fetched body"))
+                        actions.append({"tool": "extractor", "operation": "search_result_fetch", "status": operation_status, "source_id": source_id, "wave": round_number})
+                source_candidates.extend(wave_sources[fetch_limit:])
+                state = evidence_state(task, source_candidates)
+                research_trace.setdefault("queries", [])
+                research_trace["queries"] = list(dict.fromkeys([*research_trace["queries"], *wave_queries]))[:policy.max_queries]
+                wave_metadata = getattr(self.search_provider, "last_metadata", None)
+                wave_record = {"round": round_number, "queries": wave_queries, "query_count": wave_query_count, "candidate_count": len(wave_sources), "fetched_count": len(fetch_candidates), "evidence": state, "provider_metadata": wave_metadata if isinstance(wave_metadata, dict) else None}
+                research_trace["waves"].append(wave_record)
+                actions.append({"tool": "search", "operation": "adaptive_search_wave", "status": "complete", "wave": round_number, "query_count": wave_query_count, "candidate_count": len(wave_sources), "concurrency": min(policy.max_concurrency, max(1, wave_query_count))})
+                continue_search, stop_reason = should_continue(policy, state, round_number=round_number, elapsed_seconds=time.time() - search_wave_started, tried_queries=tried_queries)
+                if not continue_search:
+                    research_trace["stop_reason"] = stop_reason
+                    break
+            else:
+                research_trace["stop_reason"] = "max_rounds_reached"
+        elif source_candidates:
+            research_trace["stop_reason"] = "direct_sources_available"
+        else:
+            research_trace["stop_reason"] = "no_search_step"
 
         ranked = rank(source_candidates, task, ranking_biases, plugins=self.plugins, org_id=org_id)
         spans.append(self._span("ranking", "rank_sources", time.time(), "complete", f"{len(source_candidates)} candidates", f"{len(ranked)} ranked"))
@@ -647,7 +685,14 @@ class AgentWebEngine:
                 "selected_source_ids": [item.source.id for item in selected],
             }
         )
-        synthesis_result = synthesize(selected, task, synthesis_format)
+        final_state = evidence_state(task, [item.source for item in ranked])
+        research_trace["final_evidence"] = final_state
+        research_trace["candidate_count"] = len(source_candidates)
+        research_trace["ranked_count"] = len(ranked)
+        research_trace["selected_count"] = len(selected)
+        if research_trace.get("stop_reason") == "not_started":
+            research_trace["stop_reason"] = "ranking_complete"
+        synthesis_result = synthesize(ranked if include_all_evidence else selected, task, synthesis_format)
         spans.append(
             self._span(
                 "synthesis",
@@ -697,8 +742,14 @@ class AgentWebEngine:
                 "memory_reuse_window_seconds": self._reuse_window(task),
                 "ranker": "trust_relevance_corroboration_recency_content_type_extraction_confidence",
                 "source_limit": limit,
+                "include_all_evidence": bool(include_all_evidence),
+                "adaptive_rounds": len(research_trace.get("waves", [])),
             },
             actions=actions,
+            research_trace=research_trace,
+            evidence_gaps=[str(item) for item in final_state.get("missing_families", [])],
+            stop_reason=str(research_trace.get("stop_reason") or "ranking_complete"),
+            next_research_actions=follow_up_queries(task, final_state, len(research_trace.get("waves", [])) + 1) if final_state.get("missing_families") else [],
         )
 
     def _run_workflow(self, task: str, mode: str, org_id: str) -> SolveResponse:

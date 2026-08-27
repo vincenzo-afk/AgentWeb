@@ -106,3 +106,26 @@ class MediaAndParallelTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["task_count"], 3)
         self.assertEqual([item["task"] for item in result["results"]], ["one", "two", "three"])
+
+
+class _AdaptiveEngine:
+    class _Response:
+        def to_dict(self):
+            return {"answer": "adaptive", "research_trace": {"stop_reason": "evidence_gate_satisfied"}}
+
+    def __init__(self):
+        self.calls = []
+
+    def solve(self, task, **kwargs):
+        self.calls.append((task, kwargs))
+        return self._Response()
+
+
+class AdaptiveMCPContractTests(unittest.TestCase):
+    def test_research_forwards_adaptive_controls(self):
+        engine = _AdaptiveEngine()
+        result = AgentWebMCPTools(engine).research("compare two sources", "dive", 4, 7, 8, True)
+        self.assertEqual(result["research_trace"]["stop_reason"], "evidence_gate_satisfied")
+        self.assertEqual(engine.calls[0][1]["max_rounds"], 4)
+        self.assertEqual(engine.calls[0][1]["max_concurrency"], 7)
+        self.assertEqual(engine.calls[0][1]["evidence_target"], 8)

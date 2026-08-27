@@ -32,7 +32,24 @@
         "source_strategy": { "type": "string" },
         "memory_reuse_window_seconds": { "type": "integer", "minimum": 0 },
         "ranker": { "type": "string" },
-        "source_limit": { "type": "integer", "minimum": 1 }
+        "source_limit": { "type": "integer", "minimum": 1 },
+        "include_all_evidence": { "type": "boolean" },
+        "adaptive_rounds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ResearchTrace": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["flash", "focus", "dive", "monitor"] },
+        "waves": { "type": "array", "items": { "type": "object" } },
+        "queries": { "type": "array", "items": { "type": "string" } },
+        "stop_reason": { "type": "string" },
+        "candidate_count": { "type": "integer", "minimum": 0 },
+        "ranked_count": { "type": "integer", "minimum": 0 },
+        "selected_count": { "type": "integer", "minimum": 0 },
+        "final_evidence": { "type": "object" },
+        "policy": { "type": "object" },
+        "model_router": { "type": "object" }
       }
     },
     "ExecutionAction": {
@@ -71,7 +88,11 @@
           "title": { "type": "string" },
           "snippet": { "type": "string" },
           "trust_score": { "type": "number", "minimum": 0, "maximum": 1 },
-          "cited": { "type": "boolean" }
+          "cited": { "type": "boolean" },
+          "published_at": { "type": ["string", "null"] },
+          "content_type": { "type": ["string", "null"] },
+          "extraction_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+          "structured_data": { "type": ["object", "null"] }
         }
       }
     },
@@ -100,6 +121,10 @@
         }
       }
     },
-    "structured_output": { "type": "object" }
+    "structured_output": { "type": "object" },
+    "research_trace": { "$ref": "#/definitions/ResearchTrace" },
+    "evidence_gaps": { "type": "array", "items": { "type": "string" } },
+    "stop_reason": { "type": ["string", "null"] },
+    "next_research_actions": { "type": "array", "items": { "type": "string" } }
   }
 }

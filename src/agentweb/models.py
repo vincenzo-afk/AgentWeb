@@ -55,6 +55,10 @@ class SolveResponse:
     plan: dict[str, Any] = field(default_factory=dict)
     selection_logic: dict[str, Any] = field(default_factory=dict)
     actions: list[dict[str, Any]] = field(default_factory=list)
+    research_trace: dict[str, Any] = field(default_factory=dict)
+    evidence_gaps: list[str] = field(default_factory=list)
+    stop_reason: str | None = None
+    next_research_actions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return _omit_none(asdict(self))

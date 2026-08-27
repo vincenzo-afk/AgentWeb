@@ -508,9 +508,9 @@ class AgentWebTests(unittest.TestCase):
         provider = SearchFixtureProvider(urls)
         self.engine.search_provider = provider
 
-        flash = self.engine.solve("Find the latest AgentWeb result", mode="flash")
-        focus = self.engine.solve("Find the latest AgentWeb result", mode="focus")
-        dive = self.engine.solve("Find the latest AgentWeb result", mode="dive")
+        flash = self.engine.solve("Find the latest AgentWeb result", mode="flash", max_rounds=1)
+        focus = self.engine.solve("Find the latest AgentWeb result", mode="focus", max_rounds=1)
+        dive = self.engine.solve("Find the latest AgentWeb result", mode="dive", max_rounds=1)
 
         self.assertEqual(provider.calls, [
             ("Find the latest AgentWeb result", 4, None),

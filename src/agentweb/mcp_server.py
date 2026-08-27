@@ -39,20 +39,27 @@ class AgentWebMCPTools:
             },
             "always_on_branches": ["github_api", "reddit_json"],
             "public_branches": ["github_api", "reddit_json", "duckduckgo_instant_answer", "wikidata", "wikipedia_api", "quick_fact_apis", "stack_exchange_network", "academic_apis", "arxiv", "pubmed_eutilities", "openreview_net", "dbpedia_sparql", "wayback_cdx", "open_library", "project_gutenberg"],
-            "parallel_research": {"max_tasks": 12, "max_concurrency": 8, "description": "run independent public research tasks concurrently"},
+            "parallel_research": {"max_tasks": 12, "max_concurrency": 8, "description": "run independent adaptive research tasks concurrently"},
+            "adaptive_research": {"max_rounds": 6, "max_concurrency": 8, "evidence_target": 12, "stop_reasons": ["evidence_gate_satisfied", "wall_clock_budget_reached", "query_budget_reached", "max_rounds_reached", "candidate_budget_reached"]},
+            "model_routing": getattr(self.engine, "model_router", None).status() if getattr(self.engine, "model_router", None) else {"enabled": False, "reason": "not_available"},
             "media_support": {"youtube": "metadata and public captions when exposed", "generic_video": "OpenGraph media metadata", "credentials": "not accepted"},
             "excluded_self_hosted_or_keyed": ["see selfhosting.md"],
         }
 
-    def research(self, task: str, mode: ResearchMode = "focus") -> dict:
+    def research(self, task: str, mode: ResearchMode = "focus", max_rounds: int | None = None, max_concurrency: int | None = None, evidence_target: int | None = None, include_all_evidence: bool = True) -> dict:
         normalized_task = _bounded_text(task, field="task", maximum=2_000)
         try:
-            response = self.engine.solve(normalized_task, mode=mode, output_format="text")
+            try:
+                response = self.engine.solve(normalized_task, mode=mode, output_format="text", max_rounds=max_rounds, max_concurrency=max_concurrency, evidence_target=evidence_target, include_all_evidence=include_all_evidence)
+            except TypeError as error:
+                if "unexpected keyword argument" not in str(error):
+                    raise
+                response = self.engine.solve(normalized_task, mode=mode, output_format="text")
             return response.to_dict()
         except Exception as error:
             return {"status": "failed", "error": str(error) or type(error).__name__, "error_type": type(error).__name__, "mode": mode}
 
-    def parallel_research(self, tasks: list[str], mode: ResearchMode = "focus", max_concurrency: int = 4) -> dict:
+    def parallel_research(self, tasks: list[str], mode: ResearchMode = "focus", max_concurrency: int = 4, max_rounds: int | None = None, evidence_target: int | None = None, include_all_evidence: bool = True) -> dict:
         if not isinstance(tasks, list) or not tasks or len(tasks) > 12:
             raise ValueError("tasks must contain between 1 and 12 items")
         normalized_tasks = [_bounded_text(task, field="task", maximum=2_000) for task in tasks]
@@ -60,7 +67,7 @@ class AgentWebMCPTools:
             raise ValueError("max_concurrency must be an integer between 1 and 8")
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(max_concurrency, len(normalized_tasks))) as pool:
-            results = list(pool.map(lambda task: self.research(task, mode), normalized_tasks))
+            results = list(pool.map(lambda task: self.research(task, mode, max_rounds, max_concurrency, evidence_target, include_all_evidence), normalized_tasks))
         return {"status": "complete", "mode": mode, "task_count": len(results), "results": results}
 
     def extract_page(self, url: str, requested_schema: dict | None = None) -> dict:
@@ -125,7 +132,8 @@ def create_mcp_server(engine: AgentWebEngine | None = None) -> MCPServer:
         instructions=(
             "Use AgentWeb for bounded, citation-oriented public web research. "
             "Flash, Focus, Dive, and Monitor determine retrieval depth and polling behavior. "
-            "Do not infer facts beyond returned evidence; self-hosted and credentialed integrations are documented in selfhosting.md."
+            "AgentWeb runs independent source branches concurrently, evaluates evidence after each wave, and continues with targeted follow-up searches until its evidence gate or a transparent resource limit is reached. "
+            "Use agentweb_parallel_research for separable subquestions. Do not infer facts beyond returned evidence; self-hosted and credentialed integrations are documented in selfhosting.md."
         ),
     )
 
@@ -135,14 +143,14 @@ def create_mcp_server(engine: AgentWebEngine | None = None) -> MCPServer:
         return tools.capabilities()
 
     @mcp.tool()
-    def agentweb_research(task: str, mode: ResearchMode = "focus") -> dict:
-        """Research a question with Flash, Focus, Dive, or Monitor retrieval behavior. Use agentweb_parallel_research for independent tasks."""
-        return tools.research(task, mode)
+    def agentweb_research(task: str, mode: ResearchMode = "focus", max_rounds: int | None = None, max_concurrency: int | None = None, evidence_target: int | None = None, include_all_evidence: bool = True) -> dict:
+        """Run bounded adaptive research; it gathers parallel evidence and returns one consolidated result."""
+        return tools.research(task, mode, max_rounds, max_concurrency, evidence_target, include_all_evidence)
 
     @mcp.tool()
-    def agentweb_parallel_research(tasks: list[str], mode: ResearchMode = "focus", max_concurrency: int = 4) -> dict:
-        """Run up to twelve independent public research tasks concurrently."""
-        return tools.parallel_research(tasks, mode, max_concurrency)
+    def agentweb_parallel_research(tasks: list[str], mode: ResearchMode = "focus", max_concurrency: int = 4, max_rounds: int | None = None, evidence_target: int | None = None, include_all_evidence: bool = True) -> dict:
+        """Run independent adaptive research tasks concurrently and consolidate each result."""
+        return tools.parallel_research(tasks, mode, max_concurrency, max_rounds, evidence_target, include_all_evidence)
 
     @mcp.tool()
     def agentweb_extract_page(url: str, requested_schema: dict | None = None) -> dict:

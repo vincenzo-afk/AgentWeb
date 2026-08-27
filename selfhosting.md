@@ -25,6 +25,7 @@ This file records the capabilities intentionally **not wired into the default ru
 | CORE API | Requires a CORE API key. The default academic path uses OpenAlex, Semantic Scholar, arXiv, and PubMed public endpoints. |
 | Shodan | Requires an API key and should only be enabled for explicitly authorized infrastructure-intelligence workflows. |
 | Diffbot NLP | Requires a Diffbot token and a paid/free-tier quota decision. |
+| Optional model-assisted routing | Requires an operator-managed OpenAI-compatible `/chat/completions` endpoint and API key. Set `AGENTWEB_REASONING_ENDPOINT`, `AGENTWEB_REASONING_API_KEY`, `AGENTWEB_REASONING_MODEL`, and optionally `AGENTWEB_REASONING_TIMEOUT_SECONDS`; it is disabled when these are absent. |
 | Parallel Search MCP | Requires a configured remote MCP connector or hosted endpoint. The default path does not invent credentials or a connector URL. |
 | Binance WebSocket | Requires an external streaming connection and a deployment that can keep a worker alive. |
 | CoinCap WebSocket | Requires a persistent streaming worker. |
