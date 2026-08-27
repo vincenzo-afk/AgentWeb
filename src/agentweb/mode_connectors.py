@@ -130,29 +130,72 @@ class OfficialDocumentationBranch(_Branch):
         "openai": ["platform.openai.com", "openai.com"],
         "langchain": ["langchain-ai.github.io", "python.langchain.com", "docs.langchain.com"],
         "mcp": ["modelcontextprotocol.io", "github.com/modelcontextprotocol"],
-        "hugging face": ["huggingface.co/docs", "huggingface.co"],
+        "hugging face": ["huggingface.co"],
         "github": ["docs.github.com", "github.com"],
         "python": ["docs.python.org", "python.org"],
     }
+
+    _seed_urls = {
+        "claude": [
+            ("https://platform.claude.com/docs/en/api/messages", "Claude Messages API reference"),
+            ("https://platform.claude.com/docs/en/api/overview", "Claude API overview"),
+        ],
+        "anthropic": [
+            ("https://platform.claude.com/docs/en/api/messages", "Claude Messages API reference"),
+            ("https://platform.claude.com/docs/en/api/overview", "Claude API overview"),
+        ],
+        "openai": [
+            ("https://platform.openai.com/docs/api-reference/responses", "OpenAI Responses API reference"),
+            ("https://platform.openai.com/docs/overview", "OpenAI developer documentation"),
+        ],
+        "langchain": [
+            ("https://docs.langchain.com/oss/python/langchain/retrieval", "LangChain retrieval documentation"),
+            ("https://www.langchain.com/retrieval", "LangChain retrieval overview"),
+        ],
+        "mcp": [("https://modelcontextprotocol.io/docs/getting-started/intro", "Model Context Protocol documentation")],
+        "hugging face": [("https://huggingface.co/docs", "Hugging Face documentation")],
+        "github": [("https://docs.github.com/en", "GitHub documentation")],
+        "python": [("https://docs.python.org/3/", "Python documentation")],
+    }
+
+    @staticmethod
+    def _host_matches(url: str, allowed: tuple[str, ...]) -> bool:
+        hostname = (urlparse(url).hostname or "").lower().rstrip(".")
+        return any(hostname == domain or hostname.endswith("." + domain) for domain in allowed)
 
     def search(self, query: str, limit: int = 5, freshness: str | None = None) -> list[dict[str, str]]:
         lowered = query.lower()
         if not re.search(r"\b(?:official|documentation|docs|reference|api|sdk|how to|guide)\b", lowered):
             return []
         domains: list[str] = []
+        seeds: list[dict[str, str]] = []
         for hint, candidates in self._domain_hints.items():
             if hint in lowered:
                 domains.extend(candidates)
+                for url, title in self._seed_urls.get(hint, []):
+                    seeds.append({"url": url, "title": title, "snippet": "First-party documentation seed for this product."})
         scoped_query = query + (" " + " ".join(f"site:{domain}" for domain in list(dict.fromkeys(domains))[:3]) if domains else "")
         try:
             results = _public_web_search(scoped_query, limit, freshness)
         except Exception:
-            results = _public_web_search(query, min(20, max(limit * 2, limit)), freshness)
+            try:
+                results = _public_web_search(query, min(20, max(limit * 2, limit)), freshness)
+            except Exception:
+                results = []
         if not domains:
-            return results
+            return (seeds + results)[:limit]
         allowed = tuple(domain.lower() for domain in domains)
-        filtered = [item for item in results if urlparse(item.get("url", "")).netloc.lower().endswith(allowed)]
-        return filtered[:limit]
+        filtered = [item for item in results if self._host_matches(item.get("url", ""), allowed)]
+        merged: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in seeds + filtered:
+            url = item.get("url", "")
+            if url and url not in seen:
+                seen.add(url)
+                merged.append(item)
+            if len(merged) >= limit:
+                break
+        return merged
 
 
 class RedditJSONBranch(_Branch):

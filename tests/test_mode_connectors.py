@@ -188,7 +188,9 @@ class GeneralWebSearchTests(unittest.TestCase):
         ]
         with patch("agentweb.mode_connectors._public_web_search", return_value=rows):
             result = OfficialDocumentationBranch().search("official OpenAI API documentation", 5)
-        self.assertEqual([row["url"] for row in result], [rows[0]["url"]])
+        self.assertIn(rows[0]["url"], [row["url"] for row in result])
+        self.assertNotIn(rows[1]["url"], [row["url"] for row in result])
+        self.assertTrue(all("platform.openai.com" in row["url"] or "openai.com" in row["url"] for row in result))
 
     def test_capabilities_advertise_general_web_and_official_docs(self):
         payload = AgentWebMCPTools(object()).capabilities()
