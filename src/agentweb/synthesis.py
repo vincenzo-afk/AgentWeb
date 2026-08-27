@@ -80,14 +80,18 @@ def _evidence_score(ranked_sources: list[RankedSource], selected: list[Source]) 
 
 
 def _render_text(task: str, sources: list[Source], conflicts: list[dict[str, Any]]) -> str:
-    answer = (
-        f"AgentWeb reviewed {len(sources)} source(s) for this task: {task}\n\n"
-        + "\n".join(
-            f"{index}. {source.title or source.url} — {source.snippet[:700]}"
-            + ("\n" + "\n".join(f"   {source.id}: {claim}" for claim in _structured_evidence(source)) if _structured_evidence(source) else "")
-            for index, source in enumerate(sources, start=1)
-        )
-    )
+    rows: list[str] = []
+    for index, source in enumerate(sources, start=1):
+        title = (source.title or source.url).strip()[:180]
+        snippet = re.sub(r"\s+", " ", source.snippet).strip()[:360]
+        evidence = _structured_evidence(source)
+        prioritized_evidence = [claim for claim in evidence if claim.startswith("table ")][:1] + [claim for claim in evidence if not claim.startswith("table ")][:1]
+        detail = " | ".join(re.sub(r"\s+", " ", claim).strip()[:220] for claim in prioritized_evidence)
+        row = f"{index}. {title} — {snippet}"
+        if detail:
+            row += f"\n   Evidence: {detail}"
+        rows.append(row)
+    answer = f"AgentWeb reviewed {len(sources)} source(s) for this task: {task}\n\n" + "\n".join(rows)
     if conflicts:
         answer += "\n\nConflicting evidence was detected: " + "; ".join(
             f"{item['field']} values differ across " + ", ".join(observation["source_id"] for observation in item["observations"])

@@ -149,7 +149,7 @@ def _excerpt_for_facet(sources: list[Source], keywords: tuple[str, ...]) -> tupl
         if not hits:
             continue
         sentence = next((item for item in _sentences(text) if any(keyword in item.lower() for keyword in keywords)), text)
-        ranked.append((hits, -source_index, source, sentence[:420]))
+        ranked.append((hits, -source_index, source, re.sub(r"\s+", " ", sentence)[:300]))
     if not ranked:
         return None
     ranked.sort(key=lambda item: (-item[0], -item[1]))
@@ -262,8 +262,8 @@ def build_comparison(ranked_sources: list[RankedSource], task: str) -> tuple[str
                 source_ids = [source.id]
                 verified += 1
                 row_ids.extend(source_ids)
-            row.append(value[:700])
-            facet_records[facet_key] = {"status": "verified" if found else "unverified", "evidence": excerpt if found else "", "source_ids": source_ids}
+            row.append(value[:360])
+            facet_records[facet_key] = {"status": "verified" if found else "unverified", "evidence": excerpt[:360] if found else "", "source_ids": source_ids}
         lines.append("| " + " | ".join(row) + " |")
         line_ids.append(list(dict.fromkeys(row_ids)))
         coverage_scores.append((verified, spec.key))
