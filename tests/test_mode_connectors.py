@@ -173,6 +173,12 @@ class GeneralWebSearchTests(unittest.TestCase):
         self.assertEqual(results[0]["url"], target)
         self.assertEqual(results[0]["title"], "OpenAI API Reference")
 
+    def test_general_branch_skips_specialized_factual_queries(self):
+        from unittest.mock import patch
+        with patch("agentweb.mode_connectors._public_web_search") as search:
+            self.assertEqual(GeneralWebSearchBranch().search("What is the capital of France?", 5), [])
+            search.assert_not_called()
+
     def test_general_branch_falls_back_when_brave_fails(self):
         from unittest.mock import patch
         from agentweb.search import SearchProviderError

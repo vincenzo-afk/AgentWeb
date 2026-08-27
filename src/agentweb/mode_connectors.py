@@ -117,6 +117,9 @@ class GeneralWebSearchBranch(_Branch):
     name = "general_web_search"
 
     def search(self, query: str, limit: int = 5, freshness: str | None = None) -> list[dict[str, str]]:
+        lowered = query.lower()
+        if re.search(r"\b(?:capital|population|currency|flag)\s+of\b", lowered) or re.search(r"\b(?:weather|temperature|forecast)\b", lowered):
+            return []
         return _public_web_search(query, limit, freshness)
 
 
