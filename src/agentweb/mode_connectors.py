@@ -130,8 +130,13 @@ class OfficialDocumentationBranch(_Branch):
     _domain_hints = {
         "claude": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
         "anthropic": ["docs.claude.com", "platform.claude.com", "anthropic.com"],
-        "openai": ["platform.openai.com", "openai.com"],
+        "openai": ["platform.openai.com", "openai.github.io", "openai.com"],
+        "openai agents": ["openai.github.io", "platform.openai.com", "openai.com"],
+        "google adk": ["google.github.io", "ai.google.dev", "developers.googleblog.com"],
+        "adk": ["google.github.io", "ai.google.dev"],
         "langchain": ["langchain-ai.github.io", "python.langchain.com", "docs.langchain.com"],
+        "autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
+        "microsoft autogen": ["microsoft.github.io", "github.com/microsoft/autogen", "microsoft.com"],
         "mcp": ["modelcontextprotocol.io", "github.com/modelcontextprotocol"],
         "hugging face": ["huggingface.co"],
         "github": ["docs.github.com", "github.com"],
@@ -151,9 +156,27 @@ class OfficialDocumentationBranch(_Branch):
             ("https://platform.openai.com/docs/api-reference/responses", "OpenAI Responses API reference"),
             ("https://platform.openai.com/docs/overview", "OpenAI developer documentation"),
         ],
+        "openai agents": [
+            ("https://openai.github.io/openai-agents-python/", "OpenAI Agents SDK documentation"),
+            ("https://platform.openai.com/docs/guides/agents", "OpenAI Agents guide"),
+        ],
+        "google adk": [
+            ("https://google.github.io/adk-docs/", "Google Agent Development Kit documentation"),
+            ("https://google.github.io/adk-docs/get-started/quickstart/", "Google ADK quickstart"),
+        ],
+        "adk": [
+            ("https://google.github.io/adk-docs/", "Google Agent Development Kit documentation"),
+        ],
         "langchain": [
             ("https://docs.langchain.com/oss/python/langchain/retrieval", "LangChain retrieval documentation"),
             ("https://www.langchain.com/retrieval", "LangChain retrieval overview"),
+        ],
+        "autogen": [
+            ("https://microsoft.github.io/autogen/stable/", "Microsoft AutoGen documentation"),
+            ("https://github.com/microsoft/autogen", "Microsoft AutoGen repository"),
+        ],
+        "microsoft autogen": [
+            ("https://microsoft.github.io/autogen/stable/", "Microsoft AutoGen documentation"),
         ],
         "mcp": [("https://modelcontextprotocol.io/docs/getting-started/intro", "Model Context Protocol documentation")],
         "hugging face": [("https://huggingface.co/docs", "Hugging Face documentation")],
@@ -172,11 +195,12 @@ class OfficialDocumentationBranch(_Branch):
             return []
         domains: list[str] = []
         seeds: list[dict[str, str]] = []
-        for hint, candidates in self._domain_hints.items():
-            if hint in lowered:
-                domains.extend(candidates)
-                for url, title in self._seed_urls.get(hint, []):
-                    seeds.append({"url": url, "title": title, "snippet": "First-party documentation seed for this product."})
+        matched_hints = [(hint, candidates) for hint, candidates in self._domain_hints.items() if hint in lowered]
+        matched_hints.sort(key=lambda item: len(item[0]), reverse=True)
+        for hint, candidates in matched_hints:
+            domains.extend(candidates)
+            for url, title in self._seed_urls.get(hint, []):
+                seeds.append({"url": url, "title": title, "snippet": "First-party documentation seed for this product."})
         if not domains:
             return []
         scoped_query = query + " " + " ".join(f"site:{domain}" for domain in list(dict.fromkeys(domains))[:3])

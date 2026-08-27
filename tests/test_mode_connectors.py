@@ -192,6 +192,17 @@ class GeneralWebSearchTests(unittest.TestCase):
             self.assertEqual(OfficialDocumentationBranch().search("official documentation for a novel product", 5), [])
             search.assert_not_called()
 
+    def test_official_branch_seeds_all_frameworks_in_combined_query(self):
+        from unittest.mock import patch
+        query = "Compare Claude, OpenAI Agents SDK, Google ADK, LangChain, and Microsoft AutoGen using official documentation"
+        with patch("agentweb.mode_connectors._public_web_search", return_value=[]):
+            urls = [row["url"] for row in OfficialDocumentationBranch().search(query, 10)]
+        self.assertTrue(any("platform.claude.com" in url for url in urls))
+        self.assertTrue(any("openai.github.io" in url for url in urls))
+        self.assertTrue(any("google.github.io" in url for url in urls))
+        self.assertTrue(any("docs.langchain.com" in url for url in urls))
+        self.assertTrue(any("microsoft.github.io" in url for url in urls))
+
     def test_official_branch_filters_to_authoritative_hosts(self):
         from unittest.mock import patch
         rows = [
