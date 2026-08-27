@@ -8,7 +8,8 @@ import re
 import time
 from copy import deepcopy
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
+from urllib.request import Request, urlopen
 
 from .alerting import DeliveryResult, send_webhook
 from .auth import KeyStore
@@ -169,8 +170,34 @@ class AgentWebEngine:
             media["caption_tracks"] = tracks[:10]
         return media or None
 
-    def _enrich_media(self, parsed_media: dict | None) -> dict[str, object] | None:
+    @staticmethod
+    def _youtube_oembed(url: str) -> dict[str, object] | None:
+        host = urlparse(url).netloc.lower().split(":", 1)[0]
+        if host not in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}:
+            return None
+        endpoints = [
+            "https://www.youtube.com/oembed?" + urlencode({"url": url, "format": "json"}),
+            "https://noembed.com/embed?" + urlencode({"url": url}),
+        ]
+        for endpoint in endpoints:
+            try:
+                request = Request(endpoint, headers={"Accept": "application/json", "User-Agent": "AgentWeb/0.13"})
+                with urlopen(request, timeout=8.0) as response:
+                    payload = json.loads(response.read(200_000).decode("utf-8", errors="replace"))
+                if isinstance(payload, dict) and (payload.get("title") or payload.get("html")):
+                    media = {"video_url": url, "metadata_source": "youtube_oembed"}
+                    for key in ("title", "author_name", "author_url", "thumbnail_url", "provider_name", "provider_url", "width", "height", "type"):
+                        if payload.get(key) is not None:
+                            media[key] = payload[key]
+                    return media
+            except Exception:
+                continue
+        return None
+
+    def _enrich_media(self, parsed_media: dict | None, url: str | None = None) -> dict[str, object] | None:
         media = self._youtube_media(parsed_media)
+        if not media and url:
+            media = self._youtube_oembed(url)
         if not media:
             return None
         tracks = media.get("caption_tracks") if isinstance(media.get("caption_tracks"), list) else []
@@ -196,9 +223,14 @@ class AgentWebEngine:
             return None
         result = fetch_url(url, trust_engine=self.trust_engine)
         if result.error and not result.body:
-            return None
+            media = self._enrich_media(None, url)
+            if not media:
+                return None
+            title = str(media.get("title") or media.get("author_name") or "YouTube video")
+            snippet = str(media.get("title") or "Public YouTube metadata retrieved through oEmbed")
+            return Source(id=self._source_id(url), url=url, title=title, snippet=snippet, trust_score=self._trust_score(url, title), content_type="application/json", extraction_confidence=0.55, structured_data={"media": media})
         parsed = parse(result.body.encode("utf-8"), result.content_type)
-        media = self._enrich_media(parsed.media)
+        media = self._enrich_media(parsed.media, url)
         title = parsed.title
         if not title:
             title, _ = extract_metadata(result.body)
@@ -308,9 +340,13 @@ class AgentWebEngine:
             raise RuntimeError(decision.reason or "URL rejected by trust engine")
         result = fetch_url(url, trust_engine=self.trust_engine)
         if result.error:
+            media = self._enrich_media(None, url)
+            if media:
+                title = str(media.get("title") or media.get("author_name") or "YouTube video")
+                return {"url": url, "status": result.status or 429, "title": title, "description": str(media.get("title") or ""), "text": str(media.get("title") or "Public YouTube video metadata retrieved through oEmbed."), "links": [url], "tables": [], "entities": [str(media.get("author_name"))] if media.get("author_name") else [], "media": media, "source": "youtube_oembed", "confidence": 0.55, "confidence_reasons": ["direct page rate-limited; public oEmbed metadata used"]}
             raise RuntimeError(f"could not fetch URL: {redact_text(result.error)}")
         parsed = parse(result.body.encode("utf-8"), result.content_type)
-        media = self._enrich_media(parsed.media)
+        media = self._enrich_media(parsed.media, url)
         title = parsed.title
         description = extract_metadata(result.body)[1]
         text = parsed.text or html_to_text(result.body)

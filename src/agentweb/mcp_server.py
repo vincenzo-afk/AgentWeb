@@ -65,9 +65,13 @@ class AgentWebMCPTools:
 
     def extract_page(self, url: str, requested_schema: dict | None = None) -> dict:
         normalized_url = _bounded_text(url, field="url", maximum=2_048)
-        if requested_schema is None:
-            return self.engine.extract(normalized_url)
-        return self.engine.extract(normalized_url, requested_schema=requested_schema)
+        try:
+            if requested_schema is None:
+                return self.engine.extract(normalized_url)
+            return self.engine.extract(normalized_url, requested_schema=requested_schema)
+        except Exception as error:
+            return {"status": "failed", "url": normalized_url, "error": str(error) or type(error).__name__, "error_type": type(error).__name__, "retryable": type(error).__name__ in {"TimeoutError", "URLError"}}
+
 
     def crawl(self, url: str, max_pages: int = 10, depth: int = 1, url_pattern: str | None = None) -> dict:
         result = self.engine.crawler.crawl(_bounded_text(url, field="url", maximum=2_048), max_pages=max_pages, depth=depth, url_pattern=url_pattern)
