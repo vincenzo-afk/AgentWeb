@@ -23,7 +23,7 @@ def _bounded_text(value: str, *, field: str, maximum: int) -> str:
     return normalized
 
 
-def _compact_source(source: object, *, keep_media: bool = True) -> dict:
+def _compact_source(source: object, *, keep_media: bool = True, include_detail: bool = False) -> dict:
     if not isinstance(source, dict):
         return {}
     compact = {key: source.get(key) for key in ("id", "url", "title", "trust_score", "cited", "published_at", "content_type", "extraction_confidence") if source.get(key) is not None}
@@ -32,11 +32,11 @@ def _compact_source(source: object, *, keep_media: bool = True) -> dict:
     if isinstance(structured, dict):
         reduced: dict[str, object] = {}
         segments = structured.get("evidence_segments")
-        if isinstance(segments, dict):
-            reduced["evidence_segments"] = {str(key): str(value)[:500] for key, value in list(segments.items())[:12]}
+        if include_detail and isinstance(segments, dict):
+            reduced["evidence_segments"] = {str(key): str(value)[:300] for key, value in list(segments.items())[:8]}
         connector_fields = structured.get("connector_fields")
-        if isinstance(connector_fields, dict):
-            reduced["connector_fields"] = {str(key): str(value)[:300] for key, value in list(connector_fields.items())[:20]}
+        if include_detail and isinstance(connector_fields, dict):
+            reduced["connector_fields"] = {str(key): str(value)[:200] for key, value in list(connector_fields.items())[:12]}
         media = structured.get("media")
         if keep_media and isinstance(media, dict):
             media_fields = ("title", "author_name", "author_url", "provider_name", "provider_url", "publishDate", "uploadDate", "lengthSeconds", "viewCount", "transcript_language")
@@ -68,7 +68,7 @@ def _compact_structured_output(value: object) -> object:
     return value
 
 
-def _compact_research_response(payload: dict, *, include_all_evidence: bool = False, max_answer_chars: int = 18_000, max_sources: int | None = None) -> dict:
+def _compact_research_response(payload: dict, *, include_all_evidence: bool = False, max_answer_chars: int = 18_000, max_sources: int | None = None, include_detail: bool | None = None) -> dict:
     """Keep MCP responses answer-first and bounded even when full evidence is requested."""
     if not isinstance(payload, dict):
         return {"status": "failed", "error": "invalid research response"}
@@ -78,10 +78,11 @@ def _compact_research_response(payload: dict, *, include_all_evidence: bool = Fa
     sources = compact.get("sources")
     if isinstance(sources, list):
         source_limit = max_sources if max_sources is not None else (14 if include_all_evidence else 8)
-        compact["sources"] = [_compact_source(source) for source in sources[:source_limit]]
+        detail = include_all_evidence if include_detail is None else include_detail
+        compact["sources"] = [_compact_source(source, include_detail=detail) for source in sources[:source_limit]]
     citations = compact.get("citations")
     if isinstance(citations, list):
-        compact["citations"] = citations[:120]
+        compact["citations"] = citations[:80]
     if "structured_output" in compact:
         compact["structured_output"] = _compact_structured_output(compact.get("structured_output"))
     trace = compact.get("research_trace")
@@ -149,8 +150,8 @@ class AgentWebMCPTools:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(max_concurrency, len(normalized_tasks))) as pool:
             raw_results = list(pool.map(lambda task: self.research(task, mode, max_rounds, max_concurrency, evidence_target, include_all_evidence), normalized_tasks))
-        results = [_compact_research_response(result, include_all_evidence=include_all_evidence, max_answer_chars=9_000, max_sources=6 if include_all_evidence else 5) for result in raw_results]
-        return {"status": "complete", "mode": mode, "task_count": len(results), "results": results, "payload_policy": {"answer_first": True, "include_all_evidence": include_all_evidence, "max_answer_chars_per_task": 9_000, "sources_per_task": 6 if include_all_evidence else 5, "raw_page_structures": "omitted"}}
+        results = [_compact_research_response(result, include_all_evidence=include_all_evidence, max_answer_chars=6_000, max_sources=5 if include_all_evidence else 4, include_detail=False) for result in raw_results]
+        return {"status": "complete", "mode": mode, "task_count": len(results), "results": results, "payload_policy": {"answer_first": True, "include_all_evidence": include_all_evidence, "max_answer_chars_per_task": 6_000, "sources_per_task": 5 if include_all_evidence else 4, "raw_page_structures": "omitted"}}
 
     def extract_page(self, url: str, requested_schema: dict | None = None) -> dict:
         normalized_url = _bounded_text(url, field="url", maximum=2_048)
