@@ -67,13 +67,13 @@ def evidence_state(task: str, sources: list[object]) -> dict[str, object]:
     hosts = {urlparse(url).netloc.lower().split(":", 1)[0] for url in urls if urlparse(url).netloc}
     lowered = task.lower()
     required: set[str] = set()
-    if re.search(r"\b(?:paper|academic|study|research|citation)\b", lowered):
+    comparison_official = bool(re.search(r"\b(?:compare|comparison|frameworks?)\b", lowered) and re.search(r"\b(?:official|documentation|docs|release|changelog)\b", lowered))
+    if re.search(r"\b(?:paper|academic|study|research|citation)\b", lowered) and not comparison_official:
         required.add("academic")
     if re.search(r"\b(?:code|github|api|library|implementation|technical)\b", lowered):
         required.add("technical")
     if re.search(r"\b(?:video|youtube|watch|transcript)\b", lowered):
         required.add("media")
-    comparison_official = bool(re.search(r"\b(?:compare|comparison|frameworks?)\b", lowered) and re.search(r"\b(?:official|documentation|docs|release|changelog)\b", lowered))
     if re.search(r"\b(?:latest|current|today|news|trend)\b", lowered):
         required.add("web")
         if not comparison_official:
