@@ -197,9 +197,25 @@ class OfficialDocumentationBranch(_Branch):
         seeds: list[dict[str, str]] = []
         matched_hints = [(hint, candidates) for hint, candidates in self._domain_hints.items() if hint in lowered]
         matched_hints.sort(key=lambda item: len(item[0]), reverse=True)
+        hint_groups = {
+            "openai agents": "openai",
+            "openai": "openai",
+            "google adk": "google adk",
+            "adk": "google adk",
+            "microsoft autogen": "autogen",
+            "autogen": "autogen",
+            "anthropic": "claude",
+            "claude": "claude",
+        }
+        processed_groups: set[str] = set()
         for hint, candidates in matched_hints:
+            group = hint_groups.get(hint, hint)
+            if group in processed_groups:
+                continue
+            processed_groups.add(group)
             domains.extend(candidates)
-            for url, title in self._seed_urls.get(hint, []):
+            seed_key = hint if hint in self._seed_urls else group
+            for url, title in self._seed_urls.get(seed_key, []):
                 seeds.append({"url": url, "title": title, "snippet": "First-party documentation seed for this product."})
         if not domains:
             return []
