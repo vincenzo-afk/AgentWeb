@@ -2408,3 +2408,417 @@ CONFLICTING, OR INSUFFICIENT.
 
 ---
 
+> Use JEV as the lightweight local reasoning/router model, not as the research engine itself.
+
+
+
+Then AgentWeb becomes a self-hosted research system with a small local model controlling the orchestration.
+
+The architecture I'd use
+
+USER QUERY
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │   JEV LOCAL LLM  │
+                    │                  │
+                    │ Intent detection │
+                    │ Query analysis    │
+                    │ Research planning │
+                    │ Tool selection    │
+                    │ Evidence gaps    │
+                    └────────┬─────────┘
+                             │
+                    RESEARCH PLAN
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+          SearXNG          GitHub        Academic
+              │              │              │
+              │         only if needed      │
+              ▼              ▼              ▼
+          Web Fetch       Code Fetch     Paper Fetch
+              │              │              │
+              └──────────────┼──────────────┘
+                             ▼
+                       EVIDENCE ENGINE
+                             │
+                ┌────────────┼────────────┐
+                ▼            ▼            ▼
+             YouTube      Documents    WaterCrawl
+                │            │            │
+                └────────────┼────────────┘
+                             ▼
+                    CLAIM / EVIDENCE GRAPH
+                             │
+                             ▼
+                       EVIDENCE GATE
+                             │
+                     enough evidence?
+                       /          \
+                     YES           NO
+                      │             │
+                      ▼             ▼
+                   COMPILE       JEV REPLANS
+                      │             │
+                      └─────────────┘
+                             │
+                             ▼
+                    CONTEXT COMPILER
+                             │
+                             ▼
+                         MCP RESULT
+                             │
+                             ▼
+                       Claude/Cursor/
+                       Goose/etc.
+
+But don't make JEV responsible for everything
+
+This is the key.
+
+If you ask JEV to:
+
+> search → crawl → read 50 pages → understand PDFs → analyze GitHub → transcribe YouTube → synthesize everything
+
+
+
+you've basically turned your lightweight model into the bottleneck.
+
+Instead:
+
+JEV = Research Brain
+
+AgentWeb = Research Infrastructure
+
+External AI = Final Answering Brain
+
+That separation is excellent.
+
+
+---
+
+What JEV should actually do
+
+I'd give JEV six jobs.
+
+1. Intent Router
+
+"What changed in Rust 1.90?"
+        ↓
+recent + technical + official
+
+"How does llama.cpp implement speculative decoding?"
+        ↓
+technical + implementation + GitHub
+
+"Find research on speech-to-speech models"
+        ↓
+academic + technical + recent
+
+
+---
+
+2. Research Planner
+
+JEV produces something structured:
+
+{
+  "intent": "technical_implementation",
+  "depth": "focus",
+
+  "required": [
+    "official_docs",
+    "github"
+  ],
+
+  "optional": [
+    "technical_web"
+  ],
+
+  "avoid": [
+    "youtube",
+    "academic",
+    "reddit"
+  ],
+
+  "research_questions": [
+    "Where is the feature implemented?",
+    "How does the implementation work?",
+    "Are there documented limitations?"
+  ]
+}
+
+Then your deterministic orchestrator executes it.
+
+Don't let JEV directly execute arbitrary tools.
+
+
+---
+
+3. Query Decomposition
+
+This is where JEV can become genuinely useful.
+
+User:
+
+> "Compare llama.cpp and vLLM for local inference on my machine."
+
+
+
+JEV decomposes:
+
+Q1 → architecture
+Q2 → hardware requirements
+Q3 → quantization support
+Q4 → CPU inference
+Q5 → GPU inference
+Q6 → memory usage
+Q7 → batching
+Q8 → ecosystem
+
+Then AgentWeb maps each question to evidence sources.
+
+architecture       → GitHub/docs
+hardware           → docs + technical sources
+quantization       → GitHub/docs
+CPU                → docs + benchmarks
+GPU                → docs + benchmarks
+memory             → benchmarks
+ecosystem          → GitHub
+
+No academic search.
+
+No YouTube unless useful.
+
+
+---
+
+4. Evidence-Gap Analysis
+
+This could be one of the best uses of JEV.
+
+After research:
+
+{
+  "coverage": {
+    "architecture": 0.96,
+    "hardware": 0.91,
+    "quantization": 0.94,
+    "cpu": 0.88,
+    "gpu": 0.92,
+    "memory": 0.41,
+    "ecosystem": 0.95
+  }
+}
+
+JEV sees:
+
+memory = insufficient
+
+Instead of restarting research:
+
+SEARCH EVERYTHING AGAIN ❌
+
+it generates:
+
+Search specifically for:
+"llama.cpp memory usage benchmark"
+"vLLM memory requirements benchmark"
+
+Then only those sources are fetched.
+
+That's adaptive research.
+
+
+---
+
+5. Source Selection
+
+Don't have JEV blindly pick URLs.
+
+Your deterministic ranking system should calculate:
+
+source_score =
+    relevance
+  + authority
+  + freshness
+  + primary_source
+  + specificity
+  + independence
+  - duplication
+  - domain_saturation
+
+JEV can provide semantic relevance judgments, while your normal code handles the measurable signals.
+
+So:
+
+JEV
+ ↓
+"This source appears relevant to the question."
+ ↓
+AgentWeb scoring engine
+ ↓
+final ranking
+
+This prevents the small model from becoming the single point of failure.
+
+
+---
+
+6. Final Research Synthesis
+
+I'd actually give JEV two separate personalities internally:
+
+JEV-ROUTER
+JEV-ANALYZER
+
+Not necessarily two different models/processes.
+
+Router
+
+Fast, tiny output:
+
+{
+  "intent": "...",
+  "providers": [...],
+  "queries": [...],
+  "budget": {...}
+}
+
+Analyzer
+
+After evidence collection:
+
+claims
+conflicts
+missing evidence
+source relevance
+
+This gives you a nice architecture:
+
+USER
+ ↓
+JEV ROUTER
+ ↓
+TOOLS
+ ↓
+EVIDENCE
+ ↓
+JEV ANALYZER
+ ↓
+EVIDENCE GATE
+ ↓
+TOOLS AGAIN if necessary
+ ↓
+CONTEXT COMPILER
+
+
+---
+
+And make JEV completely optional
+
+This is important for self-hosting.
+
+AgentWeb should work in three configurations.
+
+🟢 Local AI mode
+
+JEV
++
+AgentWeb
++
+SearXNG
++
+LibreY
++
+GitHub
++
+etc.
+
+Completely self-hosted where practical.
+
+🔵 External model mode
+
+User provides:
+
+OpenAI
+Claude
+Gemini
+local Ollama model
+etc.
+
+JEV can still handle routing locally.
+
+⚫ No-LLM router mode
+
+For extremely constrained machines:
+
+heuristics
++
+keyword classifier
++
+deterministic routing
+
+So AgentWeb never becomes:
+
+> "You need a giant GPU just to use my MCP."
+
+
+
+
+---
+
+One more thing: DON'T let JEV generate arbitrary tool calls
+
+I'd strongly recommend this.
+
+Bad:
+
+JEV
+ ↓
+"call whatever tools you want"
+
+Better:
+
+JEV
+ ↓
+structured ResearchPlan
+ ↓
+Policy Validator
+ ↓
+Execution Engine
+ ↓
+approved tools
+
+For example:
+
+{
+  "providers": [
+    {
+      "name": "github",
+      "reason": "implementation evidence",
+      "max_calls": 3
+    },
+    {
+      "name": "searxng",
+      "reason": "technical discovery",
+      "max_calls": 2
+    }
+  ]
+}
+
+Then your code enforces:
+
+max_calls
+timeout
+token budget
+crawl depth
+concurrency
+allowed domains
+
+JEV plans.
+
+AgentWeb executes.
+
+That distinction is extremely important.
